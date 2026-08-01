@@ -60,6 +60,7 @@ tpfile --version
 
 > 脚本参数：`--user` 强制用户级安装（无需 sudo）；`--system` 强制装到
 > `/usr/local/bin`（需要 root）。不带参数时自动选择：普通用户走用户级，root 走系统级。
+
 ## Windows 安装（任意目录可用，无需管理员权限）
 
 在 Windows 上想让任意目录都能直接输入 `tpfile`，运行安装脚本即可（无需管理员权限，
@@ -168,9 +169,9 @@ tpfile/
 └── .github/workflows/    # CI：测试 + 交叉编译 + Release
 ```
 
-## 版本
-
 ## 校验文件哈希值
+
+以下是所有发布文件的 SHA-256 校验值（与 `sha256sums.txt` 内容一致，可用于校验下载完整性）：
 
 ```
 148f514fd8d63ea5773b81c74df07e0df21e7378a9986f8cf1bfe7d71500e25e  install.bat
@@ -178,10 +179,13 @@ fbc83c8077287f35fb186a3a1b5a06812b001e59a798696520598c1a46c8f779  install.ps1
 1a80fe4f8a9520747867038a41d27dcd5f4ae30348bdb3c5a060913f5b56d001  install.sh
 92274bff56dc034bac1321007bbb59ef27b0b87edb7875ef2d3d53234fc3cc2e  tpfile-github.zip
 a9645c9331f7431da7d031e4c9f525d81a985d664467510aad405f38b6ff52aa  tpfile-linux-amd64
+7cb8efccc20990c09c2321c6d6cbaea84f6bfaa0bc78813e9b00025311ec1879  tpfile-linux-amd64.tar.gz
 83438b63845f6ab51ed2b39666fe2d63756968bb3481f42890a5b0abee4c5db8  tpfile-linux-arm64
+ba9d09c14695907074bb3ff2ca55b8788ac1c51ccc9d079e06ab213066169f53  tpfile-linux-arm64.tar.gz
 4350a71b5d135da5fa2314ad373d44e06a7545342746ceb9b83b598865afbc08  tpfile-windows-amd64.exe
+722b02204e1cc34a7dff7db161e0caa8422d4b0feb03820f0d4a69e6c3fb40f2  tpfile-windows-amd64.zip
 dfaf80fa66475b5eb44055fc0a8df4fcffa2bef8d67b88c24f6afb90e9f233e9  tpfile-windows-arm64.exe
-
+55042f7d0e60ad3ec333c468257c7a20981b0acf79446e920af0d82e128a1ab4  tpfile-windows-arm64.zip
 ```
 
 ## 版本
