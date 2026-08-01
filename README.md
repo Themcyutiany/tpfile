@@ -149,28 +149,6 @@ make install                # Linux 安装（普通用户无需 sudo）
 make install-user            # 强制用户级安装（无需 sudo）
 ```
 
-## 上传到 GitHub
-
-仓库已包含 `.gitignore`、`LICENSE`（MIT）、`Makefile` 和 GitHub Actions CI
-（`.github/workflows/build.yml`：自动跑测试并编译四个平台的二进制）。
-
-```bash
-cd tpfile
-git init
-git add .
-git commit -m "Initial commit: tpfile v1.0.0"
-git branch -M main
-git remote add origin https://github.com/<你的用户名>/tpfile.git
-git push -u origin main
-
-# 打标签发布（会触发 CI 自动编译并把二进制挂到 Release 页）
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-> 可选：若要支持 `go install github.com/<你的用户名>/tpfile@latest`，
-> 把 `go.mod` 第一行的模块名改成 `github.com/<你的用户名>/tpfile` 即可。
-
 ## 文件结构
 
 ```
