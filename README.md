@@ -33,6 +33,14 @@ curl -fsSL https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.sh
 wget -qO- https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.sh | bash
 ```
 
+**如果直连 GitHub 很慢或失败**，先设置代理再运行上面的命令（脚本会自动检测并提示）：
+
+```bash
+export HTTPS_PROXY=http://你的代理地址:端口   # 例如：http://192.168.1.7:7897
+wget -qO- https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.sh | bash
+```
+
+
 - 自动下载当前 CPU 架构（amd64 / arm64）的最新版本
 - 普通用户装到 `~/.local/bin` 并自动加入 PATH（无需 sudo）；root 用户装到 `/usr/local/bin`
 - 装完重开终端（或 `source ~/.bashrc`），任意目录输入 `tpfile` 即可

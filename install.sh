@@ -40,10 +40,17 @@ URL="https://github.com/$REPO/releases/download/$TAG/$ASSET"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 echo "正在下载 $ASSET（版本 $TAG）..."
+# 若已设置代理环境变量，提示用户正在走代理
+if [ -n "${HTTPS_PROXY:-}${https_proxy:-}${ALL_PROXY:-}${all_proxy:-}" ]; then
+  echo "使用代理：${HTTPS_PROXY:-${https_proxy:-${ALL_PROXY:-${all_proxy:-}}}}"
+fi
+# 优先 curl（带进度条 + 自动重试），失败时回退到 wget（同样带进度条）
 if command -v curl >/dev/null 2>&1; then
-  curl -fL --progress-bar --connect-timeout 15 -o "$TMP/$ASSET" "$URL"
+  if ! curl -fL --retry 3 --progress-bar --connect-timeout 15 -o "$TMP/$ASSET" "$URL"; then
+    wget --show-progress --timeout=30 -O "$TMP/$ASSET" "$URL"
+  fi
 else
-  wget --show-progress --timeout=15 -O "$TMP/$ASSET" "$URL"
+  wget --show-progress --timeout=30 -O "$TMP/$ASSET" "$URL"
 fi
 echo ""
 tar -xzf "$TMP/$ASSET" -C "$TMP"
