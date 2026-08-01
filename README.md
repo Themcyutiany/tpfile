@@ -5,6 +5,20 @@
 多个并行 TCP 连接传输，两端实时显示进度条与速度。纯 Go 标准库实现，零第三方依赖，
 单个可执行文件即可运行。
 
+## ⚡ Windows 一键安装（推荐）
+
+在 **PowerShell** 窗口中复制粘贴下面这一行命令，按回车即可自动安装最新版：
+
+```powershell
+irm https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.ps1 | iex
+```
+
+- 无需管理员权限，自动下载当前 CPU 架构（amd64 / arm64）的最新版本
+- 安装到 `%LOCALAPPDATA%\tpfile`，自动加入用户 PATH
+- 装完**重新打开终端**，任意目录输入 `tpfile` 即可使用
+
+> Windows 用户看到这里就够了；Linux 安装和手动安装见下文对应章节。
+
 ## 特性
 
 - **多线程并行传输**：默认 4 条并行连接（`-t` 可调），大文件显著提速
