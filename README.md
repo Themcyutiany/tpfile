@@ -63,6 +63,18 @@ tpfile --version
 
 ## Windows 安装（任意目录可用，无需管理员权限）
 
+**一键安装（推荐，自动下载最新版）：**
+
+```powershell
+irm https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.ps1 | iex
+```
+
+脚本会自动完成下面这些事：下载对应 CPU 架构的最新版本 → 安装到
+`%LOCALAPPDATA%\tpfile\tpfile.exe` → 加入用户 PATH。完成后重新打开一个终端，
+任意目录输入 `tpfile` 即可。
+
+也可以下载安装包手动安装：
+
 在 Windows 上想让任意目录都能直接输入 `tpfile`，运行安装脚本即可（无需管理员权限，
 脚本会把程序装到用户目录并自动加入用户 PATH）：
 
@@ -163,6 +175,7 @@ tpfile/
 ├── util.go               # 地址解析、路径清洗、切块计划等
 ├── *_test.go             # 单元测试与端到端集成测试
 ├── Makefile
+├── install.ps1           # Windows 一键安装脚本（irm ... | iex）
 ├── scripts/install.sh    # Linux 安装脚本（用户级免 sudo / 系统级）
 ├── scripts/install.ps1   # Windows 安装脚本（免管理员，自动加入 PATH）
 ├── scripts/install.bat   # Windows 安装脚本的便捷入口（可双击）
@@ -177,7 +190,7 @@ tpfile/
 148f514fd8d63ea5773b81c74df07e0df21e7378a9986f8cf1bfe7d71500e25e  install.bat
 fbc83c8077287f35fb186a3a1b5a06812b001e59a798696520598c1a46c8f779  install.ps1
 1a80fe4f8a9520747867038a41d27dcd5f4ae30348bdb3c5a060913f5b56d001  install.sh
-92274bff56dc034bac1321007bbb59ef27b0b87edb7875ef2d3d53234fc3cc2e  tpfile-github.zip
+86959537a3ab97a9cf85824da8991b9d50e6d3fdb77b3f3e53117712f9635446  tpfile-github.zip
 a9645c9331f7431da7d031e4c9f525d81a985d664467510aad405f38b6ff52aa  tpfile-linux-amd64
 7cb8efccc20990c09c2321c6d6cbaea84f6bfaa0bc78813e9b00025311ec1879  tpfile-linux-amd64.tar.gz
 83438b63845f6ab51ed2b39666fe2d63756968bb3481f42890a5b0abee4c5db8  tpfile-linux-arm64
