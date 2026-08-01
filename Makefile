@@ -2,7 +2,7 @@ GO      ?= go
 BIN     := tpfile
 LDFLAGS := -s -w
 
-.PHONY: all build test vet linux windows release clean install install-user
+.PHONY: all build test vet linux windows release pack clean install install-user
 
 all: build
 
@@ -33,6 +33,18 @@ install:
 # 强制用户级安装（无需 sudo，装到 ~/.local/bin）
 install-user:
 	bash scripts/install.sh --user
+
+# 打包发布文件：Windows 用 zip，Linux 用 tar.gz（均包含对应平台的安装脚本）
+pack: release
+	cd dist && cp ../scripts/install.bat . && cp ../scripts/install.ps1 . && \
+	zip -q tpfile-windows-amd64.zip tpfile-windows-amd64.exe install.bat install.ps1 && \
+	zip -q tpfile-windows-arm64.zip tpfile-windows-arm64.exe install.bat install.ps1 && \
+	rm -f install.bat install.ps1
+	cd dist && cp ../scripts/install.sh . && \
+	tar -czf tpfile-linux-amd64.tar.gz tpfile-linux-amd64 install.sh && \
+	tar -czf tpfile-linux-arm64.tar.gz tpfile-linux-arm64 install.sh && \
+	rm -f install.sh
+	rm -f dist/tpfile-windows-amd64.exe dist/tpfile-windows-arm64.exe dist/tpfile-linux-amd64 dist/tpfile-linux-arm64
 
 clean:
 	rm -rf dist $(BIN)
