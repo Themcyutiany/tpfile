@@ -1,0 +1,12 @@
+# 构建产物
+/tpfile
+/dist/
+
+# 测试 / 临时文件
+*.test
+*.out
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db

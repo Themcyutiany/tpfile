@@ -1,0 +1,8 @@
+* text=auto
+*.go text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=lf
+*.bat text eol=lf
+*.md text
+Makefile text eol=lf
+.github/workflows/*.yml text eol=lf
