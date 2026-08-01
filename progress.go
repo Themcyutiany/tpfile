@@ -17,7 +17,7 @@ func isTerminal(f *os.File) bool {
 	return fi.Mode()&os.ModeCharDevice != 0
 }
 
-// progress 负责客户端进度条渲染：终端下用 \r 覆盖刷新，非终端（重定向/日志）下按固定间隔输出一行。
+// progress 负责客户端进度条渲染：终端下用 \r 在同一行内刷新；非终端（重定向/日志）只在结束时输出一行汇总。
 type progress struct {
 	name    string
 	size    int64
@@ -52,19 +52,16 @@ func (p *progress) finish() {
 
 func (p *progress) loop() {
 	defer close(p.doneC)
-	tick := time.NewTicker(100 * time.Millisecond)
+	tick := time.NewTicker(200 * time.Millisecond)
 	defer tick.Stop()
-	n := 0
 	for {
 		select {
 		case <-p.stop:
 			return
 		case <-tick.C:
-			n++
-			if !p.tty && n%20 != 0 {
-				continue
+			if p.tty {
+				p.render(false)
 			}
-			p.render(false)
 		}
 	}
 }
@@ -87,20 +84,20 @@ func (p *progress) render(final bool) {
 	if rate > 0 && done < p.size {
 		eta = etaStr(time.Duration(float64(p.size-done) / rate * float64(time.Second)))
 	}
-	line := fmt.Sprintf("%-24s %5.1f%% %s %9s/s 剩余 %s  (%s/%s)",
-		truncate(p.name, 24), pct, bar(pct, 28), humanRate(rate), eta, humanSize(done), humanSize(p.size))
+	line := fmt.Sprintf("%-20s %5.1f%% %s %9s/s 剩余 %s (%s/%s)",
+		truncate(p.name, 20), pct, bar(pct, 20), humanRate(rate), eta, humanSize(done), humanSize(p.size))
 
 	outMu.Lock()
 	defer outMu.Unlock()
 	if p.tty {
-		fmt.Fprintf(os.Stdout, "\r%-112s", line)
+		fmt.Fprintf(os.Stdout, "\r%-95s", line)
 		if final {
 			progressLive = false
 			fmt.Fprintln(os.Stdout)
 		} else {
 			progressLive = true
 		}
-	} else {
+	} else if final {
 		fmt.Fprintln(os.Stdout, line)
 	}
 }

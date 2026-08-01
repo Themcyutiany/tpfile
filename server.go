@@ -205,10 +205,10 @@ func (s *server) snapshot() (received, size int64, name string, count int) {
 	return received, size, name, count
 }
 
-// progressLoop 渲染服务端接收进度条。
+// progressLoop 渲染服务端接收进度条：终端下用 \r 在同一行内刷新；非终端（重定向/日志）只在结束时输出一行汇总。
 func (s *server) progressLoop(ctx context.Context) {
 	tty := isTerminal(os.Stdout)
-	tick := time.NewTicker(100 * time.Millisecond)
+	tick := time.NewTicker(200 * time.Millisecond)
 	defer tick.Stop()
 	var (
 		prevTotal int64
@@ -217,7 +217,6 @@ func (s *server) progressLoop(ctx context.Context) {
 		wasActive bool
 		lastName  string
 		lastSize  int64
-		lastPrint time.Time
 	)
 	for {
 		select {
@@ -241,22 +240,18 @@ func (s *server) progressLoop(ctx context.Context) {
 			}
 			prevTotal, prevTime = received, now
 			lastName, lastSize = name, size
-			force := !wasActive || (!tty && now.Sub(lastPrint) >= 2*time.Second)
-			if force {
-				lastPrint = now
-			}
-			s.renderProgress(tty, received, size, name, count, rate, false, force)
+			s.renderProgress(tty, received, size, name, count, rate, false)
 			wasActive = true
 		} else if wasActive {
 			// 全部传输完成，输出最终一行（此时必然已全部接收）
-			s.renderProgress(tty, lastSize, lastSize, lastName, 1, rate, true, true)
+			s.renderProgress(tty, lastSize, lastSize, lastName, 1, rate, true)
 			wasActive = false
 			prevTotal, rate = 0, 0
 		}
 	}
 }
 
-func (s *server) renderProgress(tty bool, received, size int64, name string, count int, rate float64, final, force bool) {
+func (s *server) renderProgress(tty bool, received, size int64, name string, count int, rate float64, final bool) {
 	pct := 0.0
 	if size > 0 {
 		pct = float64(received) * 100 / float64(size)
@@ -276,20 +271,20 @@ func (s *server) renderProgress(tty bool, received, size int64, name string, cou
 	if count > 1 {
 		label = fmt.Sprintf("%d 个传输", count)
 	}
-	line := fmt.Sprintf("接收中 %5.1f%% %s %9s/s 剩余 %s  (%s/%s)  %s",
-		pct, bar(pct, 28), humanRate(rate), eta, humanSize(received), humanSize(size), truncate(label, 30))
+	line := fmt.Sprintf("接收中 %5.1f%% %s %9s/s 剩余 %s (%s/%s) %s",
+		pct, bar(pct, 20), humanRate(rate), eta, humanSize(received), humanSize(size), truncate(label, 16))
 
 	outMu.Lock()
 	defer outMu.Unlock()
 	if tty {
-		fmt.Fprintf(os.Stdout, "\r%-140s", line)
+		fmt.Fprintf(os.Stdout, "\r%-95s", line)
 		if final {
 			progressLive = false
 			fmt.Fprintln(os.Stdout)
 		} else {
 			progressLive = true
 		}
-	} else if force || final {
+	} else if final {
 		fmt.Fprintln(os.Stdout, line)
 	}
 }

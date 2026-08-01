@@ -23,7 +23,7 @@ func printLine(format string, args ...any) {
 	outMu.Lock()
 	defer outMu.Unlock()
 	if progressLive {
-		fmt.Fprint(os.Stdout, "\r"+strings.Repeat(" ", 140)+"\r")
+		fmt.Fprint(os.Stdout, "\r"+strings.Repeat(" ", 100)+"\r")
 		progressLive = false
 	}
 	fmt.Fprintf(os.Stdout, format+"\n", args...)
