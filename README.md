@@ -17,7 +17,25 @@ irm https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.ps1 | iex
 - 安装到 `%LOCALAPPDATA%\tpfile`，自动加入用户 PATH
 - 装完**重新打开终端**，任意目录输入 `tpfile` 即可使用
 
-> Windows 用户看到这里就够了；Linux 安装和手动安装见下文对应章节。
+> Windows 用户看到这里就够了；Linux 安装见下一节，手动安装见下文对应章节。
+
+## 🐧 Linux 一键安装（推荐）
+
+在终端中复制粘贴下面这一行命令，回车即可自动安装最新版（**无需 sudo**）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.sh | bash
+```
+
+没有 curl 的话用 wget 也可以：
+
+```bash
+wget -qO- https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.sh | bash
+```
+
+- 自动下载当前 CPU 架构（amd64 / arm64）的最新版本
+- 普通用户装到 `~/.local/bin` 并自动加入 PATH（无需 sudo）；root 用户装到 `/usr/local/bin`
+- 装完重开终端（或 `source ~/.bashrc`），任意目录输入 `tpfile` 即可
 
 ## 特性
 
@@ -53,8 +71,8 @@ tpfile 运行时**不需要 sudo**（监听端口、收发文件都不需要管�
 用户级安装，全程不需要 sudo：
 
 ```bash
-# 方式一：一键安装脚本（推荐，无需 sudo）
-bash scripts/install.sh ./tpfile-linux-amd64
+# 方式一：安装脚本（适用于已下载的 tar.gz 安装包）
+bash install.sh ./tpfile-linux-amd64
 # 脚本会自动装到 ~/.local/bin，并把该目录加入 PATH（写入 ~/.bashrc 等）
 # 按提示执行下面命令让 PATH 立即生效（或重新打开终端）：
 source ~/.bashrc
@@ -190,6 +208,7 @@ tpfile/
 ├── *_test.go             # 单元测试与端到端集成测试
 ├── Makefile
 ├── install.ps1           # Windows 一键安装脚本（irm ... | iex）
+├── install.sh            # Linux 一键安装脚本（curl ... | bash）
 ├── scripts/install.sh    # Linux 安装脚本（用户级免 sudo / 系统级）
 ├── scripts/install.ps1   # Windows 安装脚本（免管理员，自动加入 PATH）
 ├── scripts/install.bat   # Windows 安装脚本的便捷入口（可双击）
