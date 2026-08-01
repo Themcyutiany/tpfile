@@ -41,10 +41,11 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 echo "正在下载 $ASSET（版本 $TAG）..."
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL --connect-timeout 15 -o "$TMP/$ASSET" "$URL"
+  curl -fL --progress-bar --connect-timeout 15 -o "$TMP/$ASSET" "$URL"
 else
-  wget -q --timeout=15 -O "$TMP/$ASSET" "$URL"
+  wget --show-progress --timeout=15 -O "$TMP/$ASSET" "$URL"
 fi
+echo ""
 tar -xzf "$TMP/$ASSET" -C "$TMP"
 
 # 4. 决定安装目录并安装
