@@ -67,7 +67,7 @@ func TestTransferE2E(t *testing.T) {
 	defer cancel()
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	if err := runClient(context.Background(), addr, []string{srcFile}, "", 4, 2, false); err != nil {
+	if err := runClient(context.Background(), addr, []string{srcFile}, "", 4, 2, 4, false); err != nil {
 		t.Fatalf("发送失败: %v", err)
 	}
 	if got := sha256file(t, filepath.Join(dst, "big.bin")); got != sha256file(t, srcFile) {
@@ -99,7 +99,7 @@ func TestTransferDir(t *testing.T) {
 	defer cancel()
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	if err := runClient(context.Background(), addr, []string{src}, "", 4, 2, false); err != nil {
+	if err := runClient(context.Background(), addr, []string{src}, "", 4, 2, 4, false); err != nil {
 		t.Fatalf("发送目录失败: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dst, ".minecraft")); err != nil {
@@ -138,7 +138,7 @@ func TestTransferIPv6(t *testing.T) {
 	}
 	conn.Close()
 
-	if err := runClient(context.Background(), fmt.Sprintf("[::1]:%d", port), []string{srcFile}, "", 2, 2, false); err != nil {
+	if err := runClient(context.Background(), fmt.Sprintf("[::1]:%d", port), []string{srcFile}, "", 2, 2, 2, false); err != nil {
 		t.Fatalf("IPv6 传输失败: %v", err)
 	}
 	if got := sha256file(t, filepath.Join(dst, "v6.bin")); got != sha256file(t, srcFile) {
@@ -248,7 +248,7 @@ func TestTransferViaProxy(t *testing.T) {
 	proxyAddr, cancelProxy := startSocks5Proxy(t)
 	defer cancelProxy()
 
-	if err := runClient(context.Background(), fmt.Sprintf("127.0.0.1:%d", port), []string{srcFile}, proxyAddr, 3, 2, false); err != nil {
+	if err := runClient(context.Background(), fmt.Sprintf("127.0.0.1:%d", port), []string{srcFile}, proxyAddr, 3, 2, 3, false); err != nil {
 		t.Fatalf("代理传输失败: %v", err)
 	}
 	if got := sha256file(t, filepath.Join(dst, "proxy.bin")); got != sha256file(t, srcFile) {
@@ -266,7 +266,7 @@ func TestEmptyFile(t *testing.T) {
 	cancel := startTestServer(t, port, dst)
 	defer cancel()
 
-	if err := runClient(context.Background(), fmt.Sprintf("127.0.0.1:%d", port), []string{srcFile}, "", 4, 2, false); err != nil {
+	if err := runClient(context.Background(), fmt.Sprintf("127.0.0.1:%d", port), []string{srcFile}, "", 4, 2, 4, false); err != nil {
 		t.Fatalf("空文件传输失败: %v", err)
 	}
 	fi, err := os.Stat(filepath.Join(dst, "empty.txt"))

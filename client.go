@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -58,8 +59,8 @@ func collectFiles(args []string) ([]fileItem, error) {
 	return items, nil
 }
 
-// runClient 连接服务端并发起传输，处理 -f 指定的全部文件/目录。
-func runClient(ctx context.Context, addr string, files []string, proxy string, threads, retries int, verbose bool) error {
+// runClient 连接服务端并发起传输，处理 -f 指定的全部文件/目录；多个文件按 jobs 并行发送。
+func runClient(ctx context.Context, addr string, files []string, proxy string, threads, retries, jobs int, verbose bool) error {
 	items, err := collectFiles(files)
 	if err != nil {
 		return err
@@ -67,29 +68,72 @@ func runClient(ctx context.Context, addr string, files []string, proxy string, t
 	if len(items) == 0 {
 		return fmt.Errorf("没有可发送的文件")
 	}
+	if jobs < 1 {
+		jobs = 1
+	}
 	var total int64
 	for _, it := range items {
 		total += it.size
 	}
 	start := time.Now()
 	printLine("连接 %s", addr)
-	for i, it := range items {
-		printLine("[%d/%d] 发送 %s (%s)", i+1, len(items), it.rel, humanSize(it.size))
-		if err := sendFile(ctx, addr, proxy, it, threads, retries, verbose); err != nil {
-			return fmt.Errorf("%s: %w", it.rel, err)
+
+	bp := newBatchProgress(len(items), total)
+	bp.start()
+
+	ctxC, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		wg       sync.WaitGroup
+		errMu    sync.Mutex
+		firstErr error
+		sentN    atomic.Int64
+	)
+	sem := make(chan struct{}, jobs)
+loop:
+	for _, it := range items {
+		select {
+		case <-ctxC.Done():
+			break loop
+		default:
 		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(it fileItem) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if verbose {
+				printLine("[%d/%d] 发送 %s (%s)", sentN.Add(1), len(items), it.rel, humanSize(it.size))
+			}
+			bp.setName(it.rel)
+			if err := sendFile(ctxC, addr, proxy, it, threads, retries, verbose, bp); err != nil {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("%s: %w", it.rel, err)
+				}
+				errMu.Unlock()
+				return
+			}
+			bp.fileDone()
+		}(it)
+	}
+	wg.Wait()
+	bp.finish()
+	if firstErr != nil {
+		return firstErr
 	}
 	el := time.Since(start)
 	rate := 0.0
 	if el > 0 {
 		rate = float64(total) / el.Seconds()
 	}
-	printLine("完成: %d 个文件, 共 %s, 用时 %s, 平均 %s/s", len(items), humanSize(total), el.Round(time.Millisecond), humanRate(rate))
+	printLine("完成: %d 个文件, 共 %s, 用时 %s, 平均 %s/s, %d 个并行任务", len(items), humanSize(total), el.Round(time.Millisecond), humanRate(rate), jobs)
 	return nil
 }
 
 // sendFile 将单个文件拆块，通过多个并行 TCP 连接发送。
-func sendFile(ctx context.Context, addr, proxy string, it fileItem, threads, retries int, verbose bool) error {
+func sendFile(ctx context.Context, addr, proxy string, it fileItem, threads, retries int, verbose bool, bp *batchProgress) error {
 	f, err := os.Open(it.abs)
 	if err != nil {
 		return err
@@ -98,8 +142,6 @@ func sendFile(ctx context.Context, addr, proxy string, it fileItem, threads, ret
 
 	chunks := chunkPlan(it.size, threads)
 	id := randomID()
-	prog := newProgress(it.rel, it.size)
-	prog.start()
 
 	ctxC, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -114,7 +156,7 @@ func sendFile(ctx context.Context, addr, proxy string, it fileItem, threads, ret
 			defer wg.Done()
 			var lastErr error
 			for attempt := 1; ; attempt++ {
-				err := sendChunk(ctxC, addr, proxy, f, id, it.rel, it.size, idx, len(chunks), c, prog)
+				err := sendChunk(ctxC, addr, proxy, f, id, it.rel, it.size, idx, len(chunks), c, bp)
 				if err == nil {
 					return
 				}
@@ -141,7 +183,6 @@ func sendFile(ctx context.Context, addr, proxy string, it fileItem, threads, ret
 	}
 	wg.Wait()
 	close(errCh)
-	prog.finish()
 
 	var firstErr error
 	for err := range errCh {
@@ -152,18 +193,20 @@ func sendFile(ctx context.Context, addr, proxy string, it fileItem, threads, ret
 	if firstErr != nil {
 		return firstErr
 	}
-	dur := time.Since(start)
-	rate := 0.0
-	if dur > 0 {
-		rate = float64(it.size) / dur.Seconds()
+	if verbose {
+		dur := time.Since(start)
+		rate := 0.0
+		if dur > 0 {
+			rate = float64(it.size) / dur.Seconds()
+		}
+		printLine("已发送 %s (%s), 用时 %s, 平均 %s/s, %d 个并行连接",
+			it.rel, humanSize(it.size), dur.Round(time.Millisecond), humanRate(rate), len(chunks))
 	}
-	printLine("已发送 %s (%s), 用时 %s, 平均 %s/s, %d 个并行连接",
-		it.rel, humanSize(it.size), dur.Round(time.Millisecond), humanRate(rate), len(chunks))
 	return nil
 }
 
 // sendChunk 通过一条连接发送一个分块：先写头部，再按偏移读取文件内容。
-func sendChunk(ctx context.Context, addr, proxy string, f *os.File, id, name string, size int64, idx, total int, c chunk, prog *progress) error {
+func sendChunk(ctx context.Context, addr, proxy string, f *os.File, id, name string, size int64, idx, total int, c chunk, bp *batchProgress) error {
 	conn, err := dialTarget(proxy, addr)
 	if err != nil {
 		return err
@@ -187,7 +230,7 @@ func sendChunk(ctx context.Context, addr, proxy string, f *os.File, id, name str
 	if c.len > 0 {
 		sr := io.NewSectionReader(f, c.start, c.len)
 		buf := make([]byte, 256*1024)
-		if _, err := io.CopyBuffer(&countingWriter{w: conn, prog: prog}, sr, buf); err != nil {
+		if _, err := io.CopyBuffer(&countingWriter{w: conn, bp: bp}, sr, buf); err != nil {
 			return err
 		}
 	}
@@ -197,12 +240,12 @@ func sendChunk(ctx context.Context, addr, proxy string, f *os.File, id, name str
 }
 
 type countingWriter struct {
-	w    io.Writer
-	prog *progress
+	w  io.Writer
+	bp *batchProgress
 }
 
 func (c *countingWriter) Write(p []byte) (int, error) {
 	n, err := c.w.Write(p)
-	c.prog.add(int64(n))
+	c.bp.add(int64(n))
 	return n, err
 }

@@ -101,6 +101,7 @@ func runServer(ctx context.Context, port int, dir string, verbose bool) error {
 
 	s.logf("已启动，监听 %s (%s)", ln.Addr(), mode)
 	s.logf("接收的文件将保存到: %s", dir)
+	s.logf("提示: 以 . 开头的目录(如 .minecraft)在 Linux 下默认隐藏, 用 ls -a 查看")
 
 	for {
 		conn, err := ln.Accept()
@@ -365,6 +366,9 @@ func (s *server) progressLoop(ctx context.Context) {
 			}
 			if !prevTime.IsZero() && now.After(prevTime) {
 				inst := float64(received-prevTotal) / now.Sub(prevTime).Seconds()
+				if inst < 0 {
+					inst = 0
+				}
 				if rate == 0 {
 					rate = inst
 				} else {

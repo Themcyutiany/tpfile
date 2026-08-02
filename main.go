@@ -11,7 +11,7 @@ import (
 	"syscall"
 )
 
-const version = "1.1.0"
+const version = "1.2.0"
 
 var (
 	outMu        sync.Mutex
@@ -42,7 +42,7 @@ func usage() {
 
 用法:
   tpfile -s [-p 端口] [-d 保存目录]                  # 服务端: 监听并接收文件
-  tpfile -c 主机:端口 [-f 文件或目录] [-t 线程数]     # 客户端: 发送文件
+  tpfile -c 主机:端口 [-f 文件或目录] [-t 线程数] [-j 并行数]  # 客户端: 发送文件
   tpfile -c [::1]:1090 -f a.bin --proxy 127.0.0.1:7897
 
 参数:
@@ -52,6 +52,7 @@ func usage() {
   -d, --dir 目录         服务端保存目录，默认当前目录
   -f, --file 路径        要发送的文件或目录，可重复；目录会递归发送
   -t, --threads 数量     每个文件的并行连接数，默认 4
+  -j, --jobs 数量        同时并行发送的文件数（目录传输更快），默认 4
   -r, --retries 数量     分块失败重试次数，默认 3
       --proxy 地址       出站走 SOCKS5 代理，如 127.0.0.1:7897
   -v, --verbose          显示详细日志
@@ -76,6 +77,7 @@ func main() {
 		files   stringList
 		threads int
 		retries int
+		jobs    int
 		proxy   string
 		verbose bool
 		showVer bool
@@ -93,6 +95,8 @@ func main() {
 	flag.Var(&files, "file", "")
 	flag.IntVar(&threads, "t", 4, "")
 	flag.IntVar(&threads, "threads", 4, "")
+	flag.IntVar(&jobs, "j", 4, "")
+	flag.IntVar(&jobs, "jobs", 4, "")
 	flag.IntVar(&retries, "r", 3, "")
 	flag.IntVar(&retries, "retries", 3, "")
 	flag.StringVar(&proxy, "proxy", "", "")
@@ -116,6 +120,9 @@ func main() {
 	}
 	if threads < 1 {
 		threads = 1
+	}
+	if jobs < 1 {
+		jobs = 1
 	}
 	if retries < 0 {
 		retries = 0
@@ -141,7 +148,7 @@ func main() {
 		if proxy != "" {
 			printLine("使用 SOCKS5 代理 %s", proxy)
 		}
-		err = runClient(ctx, addr, files, proxy, threads, retries, verbose)
+		err = runClient(ctx, addr, files, proxy, threads, retries, jobs, verbose)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %v\n", err)

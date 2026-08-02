@@ -70,7 +70,10 @@ tpfile -s -p 9000 -d /data/incoming
 # 客户端（发送）：连接并发送单个文件（-c 不带端口时默认 1090）
 tpfile -c 192.168.1.5 -f movie.mp4
 
-# 客户端：8 线程发送整个目录，走 SOCKS5 代理
+# 客户端：8 线程 + 4 个文件并行发送整个目录
+tpfile -c 192.168.1.5:1090 -f ./photos -t 8 -j 4
+
+# 客户端：走 SOCKS5 代理
 tpfile -c 192.168.1.5:1090 -f ./photos -t 8 --proxy 127.0.0.1:7897
 ```
 
@@ -232,15 +235,15 @@ tpfile/
 148f514fd8d63ea5773b81c74df07e0df21e7378a9986f8cf1bfe7d71500e25e  install.bat
 fbc83c8077287f35fb186a3a1b5a06812b001e59a798696520598c1a46c8f779  install.ps1
 1a80fe4f8a9520747867038a41d27dcd5f4ae30348bdb3c5a060913f5b56d001  install.sh
-b9e6d0e6737f3997026056bb0e33c957a5de72b6f5660a576d032418d45066da  tpfile-github.zip
-1e38ce0665f7e5fafd546145d02e1669a9e6888a431a70f465fd54fc86cf9a42  tpfile-linux-amd64
-f0f26933281b1e676e45c448bd8211a9b29018d73280a34f73f275e1828a32d0  tpfile-linux-amd64.tar.gz
-5de7e6e7f134f563f2673ecf05950463ef3a39c9b045d2d0f76320b88af9730e  tpfile-linux-arm64
-dc446d7a63a32840ba0044c9f0ca082c7b8cc2ad348daaaa841b6915a6faf0d5  tpfile-linux-arm64.tar.gz
-e17f6e2288ff367c12a54e7595e77cdd9409d05b9060b0ff573b4d8b8150b037  tpfile-windows-amd64.exe
-ebed9018059c9609d9dd7ebc33e04338e739d3e539f96d2c34f84314eab51e34  tpfile-windows-amd64.zip
-8e76c692aa65dbf56f0de0169eaf06ebfb5218254aeb32c578477cba41bb4806  tpfile-windows-arm64.exe
-e01e7cf447397d41459875586ca00e63d443b045e6e0fc3b4e2429f40efd5e9c  tpfile-windows-arm64.zip
+564880acf28b52e9bc83efc7ed885a1d3e60a23fdf2151aedae60ae769ce8427  tpfile-github.zip
+be8b22feecc2159880511274e5c4bc84e4be040a3c146884c82369f9ccb3d9ce  tpfile-linux-amd64
+f486464b866f831fbdc243948485e1389df06ab12045581893703e7d10ed769b  tpfile-linux-amd64.tar.gz
+a6fc49abf9496166fdeed932d5e42af72918f2d9e79573d46f9f0cb15dc832d2  tpfile-linux-arm64
+6274bf657bfefd87ef584586cdb44bd9a6723c14e30a249ad683e0ec26224279  tpfile-linux-arm64.tar.gz
+0daf1817dc053cd39f866874f92e7b33d4fdfd53ef8c1cabc7901acec0fb2312  tpfile-windows-amd64.exe
+d54673d9ceb15decb733b006537a19212d75708d50e51630389305b603f80dc9  tpfile-windows-amd64.zip
+27a8bc68e3c142ff47bfea86ee102b2f9834154273066cee671969a46a7ea607  tpfile-windows-arm64.exe
+20bca029a942d324b0fb6cd4fa61bd10724ef604f48dc9553d6f02e0e628e16d  tpfile-windows-arm64.zip
 ```
 
 ## 版本
