@@ -13,11 +13,21 @@ $ProgressPreference = 'SilentlyContinue'
 
 $Repo = 'Themcyutiany/tpfile'
 
-# 1. 获取最新版本号（优先用 GitHub API，失败时回退到固定版本）
+# 1. 获取最新版本号（尽力而为，仅用于显示；下载走 releases/latest/download 自动指向最新版）
+#    通过 releases/latest 的 302 重定向解析版本号，不依赖 GitHub API（兼容 PS 5.1 / 7）
 $Tag = ''
 try {
-  $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ 'User-Agent' = 'tpfile-installer' } -TimeoutSec 15
-  $Tag = [string]$rel.tag_name
+  $req = [System.Net.HttpWebRequest]::Create("https://github.com/$Repo/releases/latest")
+  $req.AllowAutoRedirect = $false
+  $req.Timeout = 15000
+  $req.UserAgent = 'tpfile-installer'
+  $httpResp = $req.GetResponse()
+  try {
+    if ([int]$httpResp.StatusCode -eq 302) {
+      $loc = [string]$httpResp.Headers['Location']
+      if ($loc -match '/releases/tag/([^/]+)') { $Tag = $Matches[1] }
+    }
+  } finally { $httpResp.Close() }
 } catch {}
 if (-not $Tag) { $Tag = '1.4.3' }
 
@@ -26,7 +36,7 @@ $arch = $env:PROCESSOR_ARCHITECTURE
 $suffix = 'amd64'
 if ($arch -eq 'ARM64') { $suffix = 'arm64' }
 $asset = "tpfile-windows-$suffix.zip"
-$url = "https://github.com/$Repo/releases/download/$Tag/$asset"
+$url = "https://github.com/$Repo/releases/latest/download/$asset"
 
 # 3. 下载到临时目录并解压
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('tpfile-install-' + [guid]::NewGuid().ToString('N'))
@@ -37,7 +47,7 @@ Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
 # 3.1 校验下载完整性（对照发布页的 sha256sums.txt）
 $sumPath = Join-Path $tmp 'sha256sums.txt'
 try {
-  Invoke-WebRequest -Uri "https://github.com/$Repo/releases/download/$Tag/sha256sums.txt" -OutFile $sumPath -UseBasicParsing -TimeoutSec 20
+  Invoke-WebRequest -Uri "https://github.com/$Repo/releases/latest/download/sha256sums.txt" -OutFile $sumPath -UseBasicParsing -TimeoutSec 20
   $want = $null
   foreach ($line in (Get-Content -LiteralPath $sumPath -ErrorAction Stop)) {
     if ($line -match "^\s*([0-9a-fA-F]{64})\s+$([regex]::Escape($asset))\s*$") {
@@ -46,7 +56,12 @@ try {
     }
   }
   if ($want) {
-    $got = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLower()
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $fs = [System.IO.File]::OpenRead($zipPath)
+      try { $got = [System.BitConverter]::ToString($sha.ComputeHash($fs)).Replace('-', '').ToLower() }
+      finally { $fs.Dispose() }
+    } finally { $sha.Dispose() }
     if ($got -ne $want) { throw "校验失败：$asset 的 SHA-256 与发布页不一致，请重新运行安装。" }
     Write-Host "校验通过：$asset 与发布页 SHA-256 一致"
   } else {

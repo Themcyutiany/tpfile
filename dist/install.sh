@@ -14,13 +14,14 @@ if [ "$(uname -s)" = "Darwin" ]; then
   exit 1
 fi
 
-# 1. 获取最新版本号（优先 GitHub API，失败时回退到固定版本）
+# 1. 获取最新版本号（尽力而为，仅用于显示；下载走 releases/latest/download 自动指向最新版）
+#    通过 releases/latest 的 302 重定向解析版本号，不依赖 GitHub API
 TAG=""
 if command -v curl >/dev/null 2>&1; then
-  TAG="$(curl -fsSL --connect-timeout 10 "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1 || true)"
+  TAG="$(curl -fsS --connect-timeout 10 -o /dev/null -w '%{redirect_url}' "https://github.com/$REPO/releases/latest" 2>/dev/null | sed -n 's#.*/releases/tag/\([^/]*\).*#\1#p' | head -n1 || true)"
 fi
 if [ -z "$TAG" ] && command -v wget >/dev/null 2>&1; then
-  TAG="$(wget -qO- --timeout=10 "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1 || true)"
+  TAG="$(wget -q --server-response -O /dev/null --timeout=10 "https://github.com/$REPO/releases/latest" 2>&1 | sed -n 's/^[[:space:]]*Location: .*\/releases\/tag\/\([^/]*\).*/\1/p' | head -n1 || true)"
 fi
 if [ -z "$TAG" ]; then TAG="1.4.3"; fi
 
@@ -34,7 +35,7 @@ case "$(uname -m)" in
     ;;
 esac
 ASSET="tpfile-linux-$SUFFIX.tar.gz"
-URL="https://github.com/$REPO/releases/download/$TAG/$ASSET"
+URL="https://github.com/$REPO/releases/latest/download/$ASSET"
 
 # 3. 下载到临时目录并解压
 TMP="$(mktemp -d)"
@@ -56,7 +57,7 @@ echo ""
 # 3.1 校验下载完整性（对照发布页的 sha256sums.txt）
 if command -v sha256sum >/dev/null 2>&1; then
   SUMFILE="$TMP/sha256sums.txt"
-  if { command -v curl >/dev/null 2>&1 && curl -fsSL --connect-timeout 10 "https://github.com/$REPO/releases/download/$TAG/sha256sums.txt" -o "$SUMFILE" 2>/dev/null; } || { command -v wget >/dev/null 2>&1 && wget -qO- --timeout=10 "https://github.com/$REPO/releases/download/$TAG/sha256sums.txt" 2>/dev/null > "$SUMFILE"; }; then
+  if { command -v curl >/dev/null 2>&1 && curl -fsSL --connect-timeout 10 "https://github.com/$REPO/releases/latest/download/sha256sums.txt" -o "$SUMFILE" 2>/dev/null; } || { command -v wget >/dev/null 2>&1 && wget -qO- --timeout=10 "https://github.com/$REPO/releases/latest/download/sha256sums.txt" 2>/dev/null > "$SUMFILE"; }; then
     WANT="$(awk -v a="$ASSET" '$2 == a {print $1; exit}' "$SUMFILE")"
     if [ -n "$WANT" ]; then
       GOT="$(sha256sum "$TMP/$ASSET" | awk '{print $1}')"
