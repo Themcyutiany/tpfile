@@ -181,9 +181,9 @@ tpfile/
 以下是所有发布文件的 SHA-256 校验值（与 `sha256sums.txt` 内容一致，可用于校验下载完整性）：
 
 ```
-054eb35e9bdb917470554f5d96ecab2248ab02138f6113bd331c4497cc360257  install.ps1
-ed2444a443f5d1344e28930848172f6ef57c2a7f4e55bac3bd836e15e06d6ae6  install.sh
-aa770e2fbda21ecf52de396b2ff415e087b4de0af9a225274a2a6c590f01d7f1  tpfile-github.zip
+9c19949a5c4865b966f4b2dba5da4599aa0c60208424cb09814774dfab0b2b04  install.ps1
+b10e4bcee27a800204e29e3f64c00beb8183790899d9e666575fda74a5ff9158  install.sh
+0be635bce6d2c2923c896ca2c9840f64a3a06fec84749c5d1094c0e5d0243ed2  tpfile-github.zip
 1435dd4eddbdcd81846558a403a32d0f252b14b56f0e69def769a2e715eedf48  tpfile-linux-amd64
 374be377bb326936d4acaee2a6be43dbcf04dcf0068f8fb68357bfb60e1a8e21  tpfile-linux-amd64.tar.gz
 e5a94d03d27d57ccc4c0da27a87e34eaf66e01c25c866c4d27f28ab5c67eb1b1  tpfile-linux-arm64
