@@ -183,23 +183,27 @@ tpfile/
 ```
 6ed7e19b7f073b96f4ab21e1570454df18b0f67a0eea3403adb3745b6c7a0e21  install.ps1
 2df98a355647e9e1531fbfd9907a3ae28efb92875de9aca784c0a1baf76c9e39  install.sh
-d0c4c79c40b827506693199da50eb80a921547b080d08e47c1ee4c7a1ae108f6  tpfile-github.zip
-1435dd4eddbdcd81846558a403a32d0f252b14b56f0e69def769a2e715eedf48  tpfile-linux-amd64
-374be377bb326936d4acaee2a6be43dbcf04dcf0068f8fb68357bfb60e1a8e21  tpfile-linux-amd64.tar.gz
-e5a94d03d27d57ccc4c0da27a87e34eaf66e01c25c866c4d27f28ab5c67eb1b1  tpfile-linux-arm64
-7a5dae5d2bf823828be35f32a6e591a5cfb423eb41c006aee4b1eefa8fe44a55  tpfile-linux-arm64.tar.gz
-079440948286f6fbea5d8430e1be9dfb03dc18fb6cd883d245ad62f5bef062b4  tpfile-windows-amd64.exe
-15c2182da1c3f4039b201291a095df48a1578ee448f575c08d6a0c8231642dec  tpfile-windows-amd64.zip
-26e8343bede4c3fb8a1982186be486c08b404b091830a0ea4501ad73f4ffffdd  tpfile-windows-arm64.exe
-1178c383cfae5989ff86ce3bc98a74e045191acde4ec805aebacf04f11cac101  tpfile-windows-arm64.zip
+f78423a89655d5d5320bbe567f6581ad0b44b0377f880bbed11b30a3f8e477dd  tpfile-github.zip
+1f26d918c3b5fad87db72a5281995acd57b1eff8b80567d14664cba16688117e  tpfile-linux-amd64
+da6de9db0a6d439d7e2487d65a0e44a591ac73393dad4fb79ef93c58cc870478  tpfile-linux-amd64.tar.gz
+d382de7f4b8a8491266e6824470811158fae8780fe8042f3eb810cb68e2ee575  tpfile-linux-arm64
+9c19fd47efda61f862aa7a1ccee77e8ba809d7b5cca8f73311e7ec09a9874ec9  tpfile-linux-arm64.tar.gz
+e6dddd28ae0701a450d24a05a439f77591bc13697ee792e39c3cf66660fdb301  tpfile-windows-amd64.exe
+ed577ce111a3cfe4788e8d8c3775fda5d8e3ef31fc4bb0639e17956aa335112d  tpfile-windows-amd64.zip
+b68e21d1b8564152fd91594a2baa410f43cf5cfaced4015e786a0276681f301c  tpfile-windows-arm64.exe
+e2d9cdd4b9ec71c0b4a4219120a2cdf9caf7ce04319e1839c3cfc02f6a10a3a5  tpfile-windows-arm64.zip
 ```
 
 ## 版本
 
-v1.4.3（新增：服务端推送进度条 + ↑/↓ 历史命令；修复：推送任意路径文件失败）
+v1.4.4（修复：文件夹传输 `file already closed`、服务端推送进度条、进度条/提示符显示）
 
-- 修复服务端推送绝对路径文件（如 `C:\Users\...\a.zip`）时报“分块 EOF”的问题
-- 服务端 `tp 文件 用户id` 推送时显示发送进度条（百分比 / 速度 / 剩余时间）
-- 客户端与服务端对话框支持 `↑` / `↓` 浏览历史输入命令，`--version` 显示 v1.4.3
+- 修复大文件夹推送时并发写入导致的 `file already closed` 错误（磁盘写入移出全局锁、传输状态按用户隔离、用户断开自动中止未完成传输）
+- 修复服务端推送多文件时进度条停留在第 1 个文件的问题，现在随完成文件数实时更新（第 N/M 个）
+- 进度条独占一行，`>` 提示符移到进度条下方一行；连接断开/传输中断后不再残留旧进度条
+- 拉取并发受 `-j` 限制，大文件夹推送时不再打爆连接数；新增 8000 文件并发压力测试（`stress_test.go`）
 
-历史版本：v1.4.2（修复输入显示竞态等）、v1.4.1、v1.4.0、v1.3.1、v1.3.0、v1.2.0、v1.1.0、v1.00
+历史版本：
+- v1.4.3：服务端推送显示进度条；对话框支持 `↑`/`↓` 浏览历史命令
+- v1.4.2：修复输入显示竞态、中文对齐等
+- v1.4.1、v1.4.0、v1.3.1、v1.3.0、v1.2.0、v1.1.0、v1.00

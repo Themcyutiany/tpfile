@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -29,6 +30,7 @@ type batchProgress struct {
 	tty     bool
 	stop    chan struct{}
 	doneC   chan struct{}
+	finishO sync.Once // 保证 finish 只执行一次
 
 	lastDone int64
 	lastAt   time.Time
@@ -54,11 +56,13 @@ func (p *batchProgress) setName(name string) { p.curName.Store(name) }
 
 func (p *batchProgress) start() { go p.loop() }
 
-// finish 停止渲染并输出最终一行。
+// finish 停止渲染并输出最终一行（可安全重复调用）。
 func (p *batchProgress) finish() {
-	close(p.stop)
-	<-p.doneC
-	p.render(true)
+	p.finishO.Do(func() {
+		close(p.stop)
+		<-p.doneC
+		p.render(true)
+	})
 }
 
 func (p *batchProgress) loop() {

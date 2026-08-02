@@ -304,7 +304,8 @@ func handleTabLocked() {
 		drawInputLocked()
 		return
 	}
-	// 多个候选且公共前缀不再增长：候选覆盖当前输入行，再重绘输入行
+	// 多个候选且公共前缀不再增长：先清掉进度行，候选覆盖当前输入行，再重绘输入行
+	clearProgressLocked()
 	fmt.Fprint(os.Stdout, "\r\x1b[2K")
 	for i, c := range cands {
 		if i > 0 {

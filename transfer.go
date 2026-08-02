@@ -21,6 +21,7 @@ type transfer struct {
 	name     string
 	size     int64
 	f        *os.File
+	token    string // 所属会话令牌，用于用户断开时中止其传输
 	total    int
 	done     atomic.Int32
 	last     atomic.Int64 // 最近活跃时间 (UnixNano)
@@ -60,6 +61,7 @@ type receiver struct {
 	completed map[string]time.Time // 已完成传输的 ID（用于重试幂等）
 	grpMu     sync.Mutex
 	groups    map[string]*groupStat
+	aborted   atomic.Bool // 传输被中断（断开/停止），不再渲染"完成"行
 }
 
 func newReceiver(dir, tag string, verbose bool) *receiver {
@@ -114,10 +116,11 @@ func (r *receiver) handleChunkConn(conn net.Conn, br *bufio.Reader, h chunkHeade
 
 func (r *receiver) getTransfer(h chunkHeader) (*transfer, error) {
 	r.regMu.Lock()
-	defer r.regMu.Unlock()
 	if tr, ok := r.reg[h.ID]; ok {
+		r.regMu.Unlock()
 		return tr, nil
 	}
+	r.regMu.Unlock()
 	rel, err := sanitizeRelPath(h.Name)
 	if err != nil {
 		return nil, err
@@ -130,8 +133,17 @@ func (r *receiver) getTransfer(h chunkHeader) (*transfer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("创建文件失败: %w", err)
 	}
-	tr := &transfer{id: h.ID, path: dest, name: rel, size: h.Size, f: f, total: h.Chunks, seen: make(map[int]bool)}
+	tr := &transfer{id: h.ID, path: dest, name: rel, size: h.Size, f: f, token: h.User, total: h.Chunks, seen: make(map[int]bool)}
+	tr.last.Store(time.Now().UnixNano()) // 立即激活，避免 watchdog 误杀尚未开始的分块
+	r.regMu.Lock()
+	if existing, ok := r.reg[h.ID]; ok {
+		// 并发下另一个分块连接已创建同一传输，丢弃本次打开的文件
+		r.regMu.Unlock()
+		f.Close()
+		return existing, nil
+	}
 	r.reg[h.ID] = tr
+	r.regMu.Unlock()
 	if r.verbose {
 		r.logf("开始接收 %s (%s, %d 个分块)", tr.name, humanSize(tr.size), tr.total)
 	} else {
@@ -175,6 +187,7 @@ func (r *receiver) finishTransfer(tr *transfer) {
 
 // abortTransfer 中止一个未完成的传输：从注册表移除并关闭文件（不输出完成日志）。
 func (r *receiver) abortTransfer(tr *transfer) {
+	r.aborted.Store(true)
 	r.regMu.Lock()
 	if _, ok := r.reg[tr.id]; !ok {
 		r.regMu.Unlock()
@@ -188,6 +201,30 @@ func (r *receiver) abortTransfer(tr *transfer) {
 		g.active--
 	}
 	r.grpMu.Unlock()
+}
+
+// abortUser 中止属于指定会话令牌的所有未完成传输（用户断开时调用）。
+func (r *receiver) abortUser(token string) {
+	r.aborted.Store(true)
+	var names []string
+	r.regMu.Lock()
+	for id, tr := range r.reg {
+		if tr.token != token {
+			continue
+		}
+		tr.f.Close()
+		delete(r.reg, id)
+		r.grpMu.Lock()
+		if g := r.groups[groupOf(tr.name)]; g != nil && g.active > 0 {
+			g.active--
+		}
+		r.grpMu.Unlock()
+		names = append(names, tr.name)
+	}
+	r.regMu.Unlock()
+	for _, n := range names {
+		r.logf("用户断开，已中止未完成的传输: %s", n)
+	}
 }
 
 func (r *receiver) isCompleted(id string) bool {
@@ -259,10 +296,16 @@ func (r *receiver) progressLoop(ctx context.Context) {
 			r.renderProgress(received, size, name, count, rate, false)
 			wasActive = true
 		} else if wasActive {
-			// 全部传输完成，输出最终一行
-			r.renderProgress(lastSize, lastSize, lastName, 1, rate, true)
+			if r.aborted.Load() {
+				// 传输被中断（断开/停止）：清掉进度条，不输出误导性的完成行
+				clearProgressNow()
+			} else {
+				// 全部传输完成，输出最终一行
+				r.renderProgress(lastSize, lastSize, lastName, 1, rate, true)
+			}
 			wasActive = false
 			prevTotal, rate = 0, 0
+			r.aborted.Store(false)
 		}
 	}
 }
@@ -390,16 +433,16 @@ func (r *receiver) settleGroups(ctx context.Context) {
 	}
 }
 
-// watchdog 清理超时未完成的传输。
+// watchdog 清理超时未完成的传输（发送方放弃重试后 15 秒内回收）。
 func (r *receiver) watchdog(ctx context.Context) {
-	t := time.NewTicker(60 * time.Second)
+	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			cutoff := time.Now().Add(-30 * time.Minute).UnixNano()
+			cutoff := time.Now().Add(-60 * time.Second).UnixNano()
 			r.regMu.Lock()
 			for id, tr := range r.reg {
 				if tr.last.Load() < cutoff {
@@ -410,6 +453,7 @@ func (r *receiver) watchdog(ctx context.Context) {
 						g.active--
 					}
 					r.grpMu.Unlock()
+					r.aborted.Store(true)
 					r.logf("清理超时未完成的传输: %s", tr.name)
 				}
 			}
@@ -428,6 +472,7 @@ func (r *receiver) watchdog(ctx context.Context) {
 
 // closeAll 关闭所有进行中的传输并输出剩余汇总。
 func (r *receiver) closeAll() {
+	r.aborted.Store(true)
 	r.regMu.Lock()
 	for id, tr := range r.reg {
 		tr.f.Close()
@@ -449,6 +494,7 @@ func (w *offsetWriter) Write(p []byte) (int, error) {
 	w.off += int64(n)
 	if w.tr != nil {
 		w.tr.received.Add(int64(n))
+		w.tr.last.Store(time.Now().UnixNano())
 	}
 	return n, err
 }

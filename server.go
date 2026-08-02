@@ -55,6 +55,7 @@ type pullAuth struct {
 	name  string // 展示用文件名
 	push  *pushJob
 	added time.Time
+	user  int // 所属用户 id，用于断开时清理
 }
 
 // pushJob 汇总一次推送（可含多个文件）的发送进度。
@@ -65,6 +66,8 @@ type pushJob struct {
 	mu        sync.Mutex
 	doneFiles int
 	expires   time.Time
+	user      int // 所属用户 id，用于断开时清理
+	finishOne sync.Once
 }
 
 const pullAuthTTL = time.Hour // 拉取授权有效期，超时自动清理
@@ -223,6 +226,21 @@ func (sh *serverShell) unregisterUser(u *user) {
 	sh.usersMu.Lock()
 	delete(sh.users, u.id)
 	sh.usersMu.Unlock()
+	// 用户断开后立即中止其正在接收/推送的传输，避免进度条残留
+	sh.rcv.abortUser(u.token)
+	sh.pullMu.Lock()
+	for auth, pa := range sh.pulls {
+		if pa.user == u.id {
+			delete(sh.pulls, auth)
+		}
+	}
+	for id, p := range sh.pushes {
+		if p.user == u.id {
+			delete(sh.pushes, id)
+			p.finishOne.Do(func() { p.bp.finish() })
+		}
+	}
+	sh.pullMu.Unlock()
 }
 
 func (sh *serverShell) tokenExistsLocked(token string) bool {
@@ -287,9 +305,10 @@ func (sh *serverShell) handleCtrl(u *user, m ctrlMsg) bool {
 			push.doneFiles++
 			all := push.doneFiles >= push.totalN
 			push.mu.Unlock()
+			push.bp.fileDone() // 驱动服务端 [N/M] 进度
 			if all {
 				delete(sh.pushes, push.id)
-				push.bp.finish()
+				push.finishOne.Do(func() { push.bp.finish() })
 			}
 		}
 		sh.pullMu.Unlock()
@@ -499,6 +518,7 @@ func (sh *serverShell) pushToUser(u *user, path string) {
 		totalN:  len(items),
 		bp:      newBatchProgress(len(items), total),
 		expires: time.Now().Add(pullAuthTTL),
+		user:    u.id,
 	}
 	push.bp.start()
 
@@ -508,7 +528,7 @@ func (sh *serverShell) pushToUser(u *user, path string) {
 	msgs := make([]ctrlMsg, 0, len(items))
 	for _, it := range items {
 		auth := randomID()
-		sh.pulls[auth] = &pullAuth{abs: it.abs, size: it.size, name: it.rel, push: push, added: time.Now()}
+		sh.pulls[auth] = &pullAuth{abs: it.abs, size: it.size, name: it.rel, push: push, added: time.Now(), user: u.id}
 		msgs = append(msgs, ctrlMsg{Type: "pull", Name: filepath.ToSlash(it.rel), Size: it.size, Auth: auth})
 	}
 	sh.pullMu.Unlock()

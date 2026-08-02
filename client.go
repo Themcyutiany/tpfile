@@ -25,6 +25,7 @@ type clientShell struct {
 	jobs     int
 	verbose  bool
 	lastPing int64
+	pullSem  chan struct{} // 拉取并发上限（=jobs），防止大文件夹推送打爆连接数
 }
 
 // runClientInteractive 连接服务端并进入交互会话。
@@ -44,6 +45,7 @@ func runClientInteractive(ctx context.Context, server, proxy string, threads, re
 		retries: retries,
 		jobs:    jobs,
 		verbose: verbose,
+		pullSem: make(chan struct{}, jobs),
 	}
 	sh.rcv = newReceiver(".", "客户端", verbose)
 	if ln, err := net.Listen("tcp", ":0"); err == nil {
@@ -155,7 +157,16 @@ func (sh *clientShell) handleCtrl(m ctrlMsg) bool {
 		return true
 	case "pull":
 		// 服务端 tp 文件 用户id: 通知本机主动拉取（数据连接由客户端发起，NAT 下也能通）
-		go sh.pullFromServer(m.Name, m.Size, m.Auth)
+		// 用信号量限制并发拉取数，避免大文件夹推送时同时建立上万条连接
+		go func(m ctrlMsg) {
+			select {
+			case sh.pullSem <- struct{}{}:
+				defer func() { <-sh.pullSem }()
+			case <-sh.ctx.Done():
+				return
+			}
+			sh.pullFromServer(m.Name, m.Size, m.Auth)
+		}(m)
 		return true
 	default:
 		printLine("未知控制消息: %s", m.Type)

@@ -134,7 +134,8 @@ func prompt() {
 func clearPromptFlag() {
 	outMu.Lock()
 	defer outMu.Unlock()
-	if progressLive || (colorOn && (promptShown || editActive)) {
+	clearProgressLocked()
+	if colorOn && (promptShown || editActive) {
 		fmt.Fprint(os.Stdout, "\r"+strings.Repeat(" ", 120)+"\r")
 	}
 	progressLive = false
@@ -145,15 +146,15 @@ func clearPromptFlag() {
 	//（readLineInteractive 启动/结束时开关）；主循环可能在读取协程已经启动了
 	// 下一行编辑器之后才执行到这里，一旦覆盖会导致“能输入但屏幕不显示”。
 }
-
-// drawInputLocked 重绘提示行（进度条存在时一并重绘），调用方需持有 outMu。
+// drawInputLocked 重绘提示行（进度条存在时在上一行一并重绘），调用方需持有 outMu。
 // 整行拼成一次写入，减少逐字节刷屏带来的输入卡顿。
 func drawInputLocked() {
 	var sb strings.Builder
-	sb.WriteString("\r\x1b[2K")
+	sb.WriteString("\r\x1b[2K") // 清当前行（提示行）
 	if progressLive && lastBarLine != "" {
+		sb.WriteString("\x1b[1A\r\x1b[2K") // 上一行是进度行，清掉
 		sb.WriteString(lastBarLine)
-		sb.WriteString(" ")
+		sb.WriteString("\n") // 提示符换到进度行下方一行
 	}
 	sb.WriteString(paint(promptColor, "> "))
 	if editActive {
@@ -165,16 +166,31 @@ func drawInputLocked() {
 	fmt.Fprint(os.Stdout, sb.String())
 	promptOnScreen = true
 }
-
 func clearProgressLocked() {
-	if progressLive {
-		fmt.Fprint(os.Stdout, "\r"+strings.Repeat(" ", 120)+"\r")
-		progressLive = false
+	if !progressLive {
+		return
+	}
+	// 光标位于进度行末尾（无提示符）或提示行末尾（有提示符）
+	fmt.Fprint(os.Stdout, "\r\x1b[2K")
+	if promptOnScreen {
+		fmt.Fprint(os.Stdout, "\x1b[1A\r\x1b[2K")
+	}
+	progressLive = false
+	lastBarLine = ""
+	promptOnScreen = false
+}
+
+// clearProgressNow 清掉当前进度条（中断时使用，不留任何残留行）。
+func clearProgressNow() {
+	outMu.Lock()
+	defer outMu.Unlock()
+	clearProgressLocked()
+	if promptOnScreen {
+		fmt.Fprint(os.Stdout, "\r\x1b[2K")
 		promptOnScreen = false
 	}
 }
-
-// renderProgress 渲染一行进度：进度条与提示符共占一行（终端下用 \r 刷新），
+// renderProgress 渲染一行进度：进度条独占一行，提示符在其下方一行（终端下用 \r 刷新）。
 // 非终端只在 final 时输出一行。
 func renderProgress(line string, final bool) {
 	outMu.Lock()
@@ -203,7 +219,8 @@ func renderProgress(line string, final bool) {
 		return
 	}
 	if promptShown || editActive {
-		// 行尾保留提示符（含正在编辑的缓冲），方便传输期间继续输入
+		// 进度条独占一行，提示符换到下一行，传输期间照常可以输入
+		fmt.Fprintln(os.Stdout)
 		fmt.Fprint(os.Stdout, paint(promptColor, "> "))
 		if editActive {
 			fmt.Fprint(os.Stdout, string(editBuf))
