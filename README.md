@@ -52,7 +52,8 @@ wget -qO- https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.sh 
 - **断线重试**：单个分块失败自动重试（`-r` 可调），传输结果以服务端落盘确认（ACK）为准
 - **IPv6 原生支持**：服务端默认双栈监听（IPv4 + IPv6），客户端支持 `[::1]:1090`、`::1:1090` 等写法
 - **SOCKS5 代理**：`--proxy 127.0.0.1:7897` 可走代理出站，直连不通时非常有用
-- **目录传输**：`-f` 传目录会递归发送，服务端自动重建目录结构
+- **目录传输**：`-f` 传目录会递归发送，并保留顶层文件夹名（如 `-f .minecraft`，接收端会生成 `.minecraft/...`）；以 `.` 开头的隐藏目录可用 `ls -a` 查看
+- **目录日志合并**：服务端接收目录时，逐文件的"开始/完成"日志合并为一行的开始/完成汇总，不再刷屏
 - **多文件**：`-f` 可重复使用，一次连接发送多个文件
 - **安全细节**：文件名清洗防目录穿越；同名文件自动追加 `(1)`、`(2)` 等后缀
 - **IPv4/IPv6 双栈监听**，端口默认 **1090**
@@ -231,17 +232,17 @@ tpfile/
 148f514fd8d63ea5773b81c74df07e0df21e7378a9986f8cf1bfe7d71500e25e  install.bat
 fbc83c8077287f35fb186a3a1b5a06812b001e59a798696520598c1a46c8f779  install.ps1
 1a80fe4f8a9520747867038a41d27dcd5f4ae30348bdb3c5a060913f5b56d001  install.sh
-be7ea749eb72221d5b60fe42cfd0f116087da573f4b8ff6b9746530b82620d17  tpfile-github.zip
-1dd26e41b284492a2881733b9afa2b6dd9cfef386ee7f42566600c5ed3f1e3d1  tpfile-linux-amd64
-1b5c21f27ced2bdf699b6a5092957fcf1ec56037c6efc5605a110850ed6cb26c  tpfile-linux-amd64.tar.gz
-aeff9cd6e9c4800fbd1dd85ee4a42ce385b7638076a4cf7ed21b27de33af6cca  tpfile-linux-arm64
-24171c2eb075027ce0a85db2ef68f53427938f9762313d73004ecce602f05e54  tpfile-linux-arm64.tar.gz
-dba3563f20cabe5b69a3d7242d81ec187d1d2cc3f55aa52ea68d5ac512eebee5  tpfile-windows-amd64.exe
-ab2c16eca643264335282c0bc3de3530678dd2728f8ee7406fa51aeb55804b88  tpfile-windows-amd64.zip
-7895ca0869bf0a45bb37abda688726c7fe618ff3ba7f851bcd4428e98d69570e  tpfile-windows-arm64.exe
-3694d4ebcb45ca6e1f2051de8c40e46197a2ab7290fefa335a10ef0f0d2e43d4  tpfile-windows-arm64.zip
+b9e6d0e6737f3997026056bb0e33c957a5de72b6f5660a576d032418d45066da  tpfile-github.zip
+1e38ce0665f7e5fafd546145d02e1669a9e6888a431a70f465fd54fc86cf9a42  tpfile-linux-amd64
+f0f26933281b1e676e45c448bd8211a9b29018d73280a34f73f275e1828a32d0  tpfile-linux-amd64.tar.gz
+5de7e6e7f134f563f2673ecf05950463ef3a39c9b045d2d0f76320b88af9730e  tpfile-linux-arm64
+dc446d7a63a32840ba0044c9f0ca082c7b8cc2ad348daaaa841b6915a6faf0d5  tpfile-linux-arm64.tar.gz
+e17f6e2288ff367c12a54e7595e77cdd9409d05b9060b0ff573b4d8b8150b037  tpfile-windows-amd64.exe
+ebed9018059c9609d9dd7ebc33e04338e739d3e539f96d2c34f84314eab51e34  tpfile-windows-amd64.zip
+8e76c692aa65dbf56f0de0169eaf06ebfb5218254aeb32c578477cba41bb4806  tpfile-windows-arm64.exe
+e01e7cf447397d41459875586ca00e63d443b045e6e0fc3b4e2429f40efd5e9c  tpfile-windows-arm64.zip
 ```
 
 ## 版本
 
-v1.0.0
+v1.1.0

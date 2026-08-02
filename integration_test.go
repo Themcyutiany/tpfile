@@ -77,7 +77,7 @@ func TestTransferE2E(t *testing.T) {
 
 func TestTransferDir(t *testing.T) {
 	root := t.TempDir()
-	src := filepath.Join(root, "src")
+	src := filepath.Join(root, ".minecraft")
 	dst := filepath.Join(root, "dst")
 	os.MkdirAll(filepath.Join(src, "sub", "deep"), 0o755)
 
@@ -102,8 +102,11 @@ func TestTransferDir(t *testing.T) {
 	if err := runClient(context.Background(), addr, []string{src}, "", 4, 2, false); err != nil {
 		t.Fatalf("发送目录失败: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(dst, ".minecraft")); err != nil {
+		t.Fatalf("顶层目录 .minecraft 未在接收端创建: %v", err)
+	}
 	for rel := range files {
-		got, err := os.ReadFile(filepath.Join(dst, filepath.FromSlash(rel)))
+		got, err := os.ReadFile(filepath.Join(dst, ".minecraft", filepath.FromSlash(rel)))
 		if err != nil {
 			t.Fatalf("读取 %s: %v", rel, err)
 		}

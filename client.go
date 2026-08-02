@@ -26,8 +26,11 @@ func collectFiles(args []string) ([]fileItem, error) {
 			return nil, fmt.Errorf("%s: %w", a, err)
 		}
 		if fi.IsDir() {
-			root := a
-			err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			base := filepath.Base(a)
+			if base == "." || base == string(filepath.Separator) {
+				base = filepath.Base(filepath.Clean(a))
+			}
+			err := filepath.WalkDir(a, func(p string, d fs.DirEntry, err error) error {
 				if err != nil {
 					return err
 				}
@@ -38,11 +41,11 @@ func collectFiles(args []string) ([]fileItem, error) {
 				if err != nil {
 					return err
 				}
-				rel, err := filepath.Rel(root, p)
+				rel, err := filepath.Rel(a, p)
 				if err != nil {
 					return err
 				}
-				items = append(items, fileItem{abs: p, rel: filepath.ToSlash(rel), size: info.Size()})
+				items = append(items, fileItem{abs: p, rel: filepath.ToSlash(filepath.Join(base, rel)), size: info.Size()})
 				return nil
 			})
 			if err != nil {

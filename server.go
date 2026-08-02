@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,10 +36,31 @@ type server struct {
 	reg       map[string]*transfer // 进行中的传输
 	compMu    sync.Mutex
 	completed map[string]time.Time // 已完成传输的 ID（用于重试幂等）
+	grpMu     sync.Mutex
+	groups    map[string]*groupStat // 顶层目录/单文件的汇总统计
+}
+
+// groupStat 统计一个顶层分组（单个文件或一个目录）的接收进度。
+type groupStat struct {
+	group    string    // 顶层名称: 目录的第一段, 或单个文件名
+	dirLike  bool      // 是否为目录内文件
+	files    int       // 已完成的文件数
+	bytes    int64     // 已完成字节数
+	active   int       // 正在接收的文件数（并行/多客户端时防止提前结算）
+	lastSeen time.Time // 最近一次有文件到达的时间
+	reported bool      // 是否已输出汇总
+}
+
+// groupOf 返回顶层分组名: 目录内文件取路径第一段, 单文件用整个文件名。
+func groupOf(rel string) string {
+	if i := strings.IndexByte(rel, '/'); i > 0 {
+		return rel[:i]
+	}
+	return rel
 }
 
 func newServer(dir string) *server {
-	return &server{dir: dir, reg: make(map[string]*transfer), completed: make(map[string]time.Time)}
+	return &server{dir: dir, reg: make(map[string]*transfer), completed: make(map[string]time.Time), groups: make(map[string]*groupStat)}
 }
 
 func (s *server) logf(format string, args ...any) {
@@ -70,6 +92,7 @@ func runServer(ctx context.Context, port int, dir string, verbose bool) error {
 	s := newServer(dir)
 	go s.watchdog(ctx)
 	go s.progressLoop(ctx)
+	go s.settleGroups(ctx)
 	go func() {
 		<-ctx.Done()
 		ln.Close()
@@ -104,7 +127,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn, verbose bool) {
 		conn.Write([]byte(ackOK))
 		return
 	}
-	tr, err := s.getTransfer(h)
+	tr, err := s.getTransfer(h, verbose)
 	if err != nil {
 		s.logf("传输 %s 失败: %v", h.Name, err)
 		return
@@ -122,12 +145,12 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn, verbose bool) {
 		return
 	}
 	if s.chunkDone(tr, h.Chunk) {
-		s.finishTransfer(tr)
+		s.finishTransfer(tr, verbose)
 	}
 	conn.Write([]byte(ackOK))
 }
 
-func (s *server) getTransfer(h chunkHeader) (*transfer, error) {
+func (s *server) getTransfer(h chunkHeader, verbose bool) (*transfer, error) {
 	s.regMu.Lock()
 	defer s.regMu.Unlock()
 	if tr, ok := s.reg[h.ID]; ok {
@@ -147,7 +170,11 @@ func (s *server) getTransfer(h chunkHeader) (*transfer, error) {
 	}
 	tr := &transfer{id: h.ID, path: dest, name: rel, size: h.Size, f: f, total: h.Chunks, seen: make(map[int]bool)}
 	s.reg[h.ID] = tr
-	s.logf("开始接收 %s (%s, %d 个分块)", tr.name, humanSize(tr.size), tr.total)
+	if verbose {
+		s.logf("开始接收 %s (%s, %d 个分块)", tr.name, humanSize(tr.size), tr.total)
+	} else {
+		s.noteGroupStart(tr.name, humanSize(tr.size), tr.total)
+	}
 	return tr, nil
 }
 
@@ -162,7 +189,7 @@ func (s *server) chunkDone(tr *transfer, idx int) bool {
 	return tr.done.Add(1) == int32(tr.total)
 }
 
-func (s *server) finishTransfer(tr *transfer) {
+func (s *server) finishTransfer(tr *transfer, verbose bool) {
 	s.regMu.Lock()
 	delete(s.reg, tr.id)
 	s.regMu.Unlock()
@@ -173,7 +200,113 @@ func (s *server) finishTransfer(tr *transfer) {
 	s.compMu.Lock()
 	s.completed[tr.id] = time.Now()
 	s.compMu.Unlock()
-	s.logf("接收完成 %s (%s)", tr.name, humanSize(tr.size))
+	if verbose {
+		s.logf("接收完成 %s (%s)", tr.name, humanSize(tr.size))
+		return
+	}
+	if !strings.Contains(tr.name, "/") {
+		s.logf("接收完成 %s (%s)", tr.name, humanSize(tr.size))
+		return
+	}
+	s.noteGroupDone(tr.name, tr.size)
+}
+
+// noteGroupStart 记录一个文件开始接收: 单文件保留原逐文件日志, 目录文件只输出一行。
+func (s *server) noteGroupStart(name, sizeStr string, chunks int) {
+	dirLike := strings.Contains(name, "/")
+	s.grpMu.Lock()
+	defer s.grpMu.Unlock()
+	if !dirLike {
+		s.logf("开始接收 %s (%s, %d 个分块)", name, sizeStr, chunks)
+		return
+	}
+	group := groupOf(name)
+	g := s.groups[group]
+	if g == nil {
+		// 新目录: 先结算已完成的其它目录, 再输出本目录的开始行
+		for og, o := range s.groups {
+			if og != group && o.files > 0 && o.active == 0 && !o.reported {
+				s.reportGroupLocked(o)
+				delete(s.groups, og)
+			}
+		}
+		g = &groupStat{group: group, dirLike: true}
+		s.groups[group] = g
+		s.logf("开始接收 %s (目录, 多个文件)", group)
+	}
+	g.active++
+	g.lastSeen = time.Now()
+}
+
+// noteGroupDone 记录一个文件接收完成, 并汇总到所属目录统计。
+func (s *server) noteGroupDone(name string, size int64) {
+	group := groupOf(name)
+	s.grpMu.Lock()
+	defer s.grpMu.Unlock()
+	g := s.groups[group]
+	if g == nil {
+		return
+	}
+	g.files++
+	g.bytes += size
+	g.active--
+	if g.active < 0 {
+		g.active = 0
+	}
+	g.lastSeen = time.Now()
+}
+
+// reportGroupLocked 输出一个目录接收汇总（调用方需持有 grpMu）。
+func (s *server) reportGroupLocked(g *groupStat) {
+	g.reported = true
+	msg := fmt.Sprintf("接收完成 %s (%d 个文件, 共 %s)", g.group, g.files, humanSize(g.bytes))
+	if strings.HasPrefix(g.group, ".") {
+		msg += " (以 . 开头是隐藏目录, 在保存目录下用 ls -a 查看)"
+	}
+	s.logf("%s", msg)
+}
+
+// finalizeIdleGroups 结算空闲一段时间的目录。
+func (s *server) finalizeIdleGroups(idle time.Duration) {
+	s.grpMu.Lock()
+	defer s.grpMu.Unlock()
+	cutoff := time.Now().Add(-idle)
+	for group, g := range s.groups {
+		if g.reported || g.files == 0 || g.active > 0 {
+			continue
+		}
+		if g.lastSeen.Before(cutoff) {
+			s.reportGroupLocked(g)
+			delete(s.groups, group)
+		}
+	}
+}
+
+// finalizeAllGroups 服务停止时结算所有未输出的目录汇总。
+func (s *server) finalizeAllGroups() {
+	s.grpMu.Lock()
+	defer s.grpMu.Unlock()
+	for group, g := range s.groups {
+		if g.files > 0 && !g.reported {
+			s.reportGroupLocked(g)
+		}
+		delete(s.groups, group)
+	}
+}
+
+// settleGroups 定时结算空闲目录, 服务退出时输出剩余汇总。
+func (s *server) settleGroups(ctx context.Context) {
+	t := time.NewTicker(1 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			s.finalizeAllGroups()
+			return
+		case <-t.C:
+			s.finalizeIdleGroups(2 * time.Second)
+		}
+	}
 }
 
 func (s *server) isCompleted(id string) bool {
@@ -303,6 +436,11 @@ func (s *server) watchdog(ctx context.Context) {
 				if tr.last.Load() < cutoff {
 					tr.f.Close()
 					delete(s.reg, id)
+					s.grpMu.Lock()
+					if g := s.groups[groupOf(tr.name)]; g != nil && g.active > 0 {
+						g.active--
+					}
+					s.grpMu.Unlock()
 					s.logf("清理超时未完成的传输: %s", tr.name)
 				}
 			}
@@ -326,6 +464,7 @@ func (s *server) closeAll() {
 		tr.f.Close()
 		delete(s.reg, id)
 	}
+	s.finalizeAllGroups()
 }
 
 // offsetWriter 按指定偏移写入同一文件句柄，各分块并发安全，并累计已写入字节。
