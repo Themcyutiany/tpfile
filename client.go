@@ -51,7 +51,7 @@ func runClientInteractive(ctx context.Context, server, proxy string, threads, re
 		sh.inPort = ln.Addr().(*net.TCPAddr).Port
 		go sh.acceptChunks(ctx)
 	}
-	if err := writeJSONLine(conn, ctrlMsg{Type: "hello", Token: token, Port: sh.inPort}); err != nil {
+	if err := writeJSONLine(conn, ctrlMsg{Type: "hello", V: pullProtoVer, Token: token, Port: sh.inPort}); err != nil {
 		return fmt.Errorf("发送会话信息失败: %w", err)
 	}
 	go sh.rcv.progressLoop(ctx)
@@ -60,9 +60,6 @@ func runClientInteractive(ctx context.Context, server, proxy string, threads, re
 
 	printOK("已连接 %s", server)
 	printDim("输入 help 查看指令；stop 或 Ctrl+C 断开")
-	if sh.inPort == 0 {
-		printDim("提示: 本机无法监听端口，服务端将不能推送文件给你")
-	}
 
 	ctrlCh := make(chan ctrlMsg, 16)
 	br := bufio.NewReaderSize(conn, 256*1024)
@@ -156,6 +153,10 @@ func (sh *clientShell) handleCtrl(m ctrlMsg) bool {
 		// 服务端 tp -me: 把本地文件发给服务端
 		go sh.sendLocal(sh.ctx, m.Name)
 		return true
+	case "pull":
+		// 服务端 tp 文件 用户id: 通知本机主动拉取（数据连接由客户端发起，NAT 下也能通）
+		go sh.pullFromServer(m.Name, m.Size)
+		return true
 	default:
 		printLine("未知控制消息: %s", m.Type)
 		return true
@@ -199,10 +200,6 @@ func (sh *clientShell) execCmd(line string) bool {
 				printDim("用法: tp -me 服务端目录里的文件")
 				return true
 			}
-			if sh.inPort == 0 {
-				printErr("本机无法接收推送，请检查监听端口")
-				return true
-			}
 			writeJSONLine(sh.conn, ctrlMsg{Type: "send", Name: fields[2]})
 			return true
 		}
@@ -233,6 +230,26 @@ func (sh *clientShell) sendLocal(ctx context.Context, path string) {
 		return
 	}
 	printOK("已发送 %s (%d 个文件)", path, len(items))
+}
+
+// pullFromServer 响应服务端推送：以客户端为发起方，向服务端建立分块连接拉取文件。
+func (sh *clientShell) pullFromServer(name string, size int64) {
+	if size < 0 {
+		printErr("拉取 %s 失败: 文件大小无效", name)
+		return
+	}
+	dial := func() (net.Conn, error) {
+		return dialTarget(sh.proxy, sh.server)
+	}
+	ctx, cancel := context.WithTimeout(sh.ctx, 30*time.Minute)
+	defer cancel()
+	if err := pullFile(ctx, dial, sh.token, sh.rcv, name, size, sh.threads, sh.retries, sh.verbose); err != nil {
+		writeJSONLine(sh.conn, ctrlMsg{Type: "pull_done", Name: name, Msg: err.Error()})
+		printErr("拉取 %s 失败: %v", name, err)
+		return
+	}
+	writeJSONLine(sh.conn, ctrlMsg{Type: "pull_done", Name: name})
+	printOK("已从服务端接收 %s", name)
 }
 
 // acceptChunks 接受服务端推来的分块连接（客户端作为接收端）。

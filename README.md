@@ -83,6 +83,9 @@ tpfile -c 192.168.1.5:1090
 
 > 服务端指令里的相对路径基于服务端保存目录（`-d`）；`tp -me` 里的路径是对方
 > 客户端当前目录里的文件。传输进行中两端都可以继续输入其它指令。
+>
+> 服务端向客户端推送文件（`tp 文件 用户id`）由客户端主动建立连接拉取，双方在不同
+> 网络（NAT/防火墙后）也能正常传输，无需对方开放端口。
 
 ## 🌰 使用示例
 
@@ -126,13 +129,14 @@ stop                    # 断开
 
 ## 🔧 工作原理
 
-1. 客户端连接服务端后发送 `hello` 建立会话（服务端分配用户 id），并开放一个入站
-   端口用于接收服务端的文件推送。
+1. 客户端连接服务端后发送 `hello` 建立会话（服务端分配用户 id）。
 2. 传文件时，发送方把文件按 `-t` 切成若干分块，通过多条并行 TCP 连接发送；首部
    携带会话令牌，接收方校验令牌后按偏移落盘（`WriteAt`），分块可乱序到达。
 3. 每个分块落盘后接收方回复 `ok` 确认，重试完全幂等；`-j` 让多个文件同时传输。
 4. 控制连接上跑 `ls / ping / kick / send` 等指令，与文件传输互不阻塞，因此
    进度条显示时依然可以输入指令。
+5. 服务端向客户端发文件（`tp 文件 用户id`）时，数据连接由客户端主动发起
+   （拉取模式），所以服务端不需要能连到客户端，跨 NAT / 防火墙也能用。
 
 ## 🧪 从源码构建与测试
 
@@ -177,17 +181,17 @@ tpfile/
 以下是所有发布文件的 SHA-256 校验值（与 `sha256sums.txt` 内容一致，可用于校验下载完整性）：
 
 ```
-34454ef6eed22f8a125fc349896597e3612243906e2a91c696de5ef9211f58be  install.ps1
-66f894e4b388147f5e4404127e0c9c0c9c80026c3831646643bcb043273fbd47  install.sh
-06d9eb7f7b459c0f5790bc7760f47cc58f530dd95a7941ef10b2f655e8fbd441  tpfile-github.zip
-ebb5ec3bf7c066d024e29e67f4c3c5305c3438f82033dd54b58ef862143153cd  tpfile-linux-amd64
-9f73adb4d2e10d1ad202b62b33b87886d9dc0132a6ac5a161c223af73e513dc4  tpfile-linux-amd64.tar.gz
-7ad7ec91e0163e6ea1a26c83f27e1b7eda51c99ac120f4f0f53f31f300478356  tpfile-linux-arm64
-b35877d9f4b923e4b57db25b6c4cdc55016fa58c58e070fb9184bf0d83724b09  tpfile-linux-arm64.tar.gz
-bf84fbfad5f29df532be7c866335d136a957212aa9fc1f24c838457ef7466654  tpfile-windows-amd64.exe
-657589bcaf2f7aa256463c77cecf807cc29bbd2cd0a93435d1b7719aa4153ece  tpfile-windows-amd64.zip
-c6effc37c3a25063a9ddc333cdb494741397b1e6aea78186d66f1806a911489a  tpfile-windows-arm64.exe
-77e0203d497f91d1382ad9e1dd4e587ea141be1a002a6353833bec2dccbdc755  tpfile-windows-arm64.zip
+054eb35e9bdb917470554f5d96ecab2248ab02138f6113bd331c4497cc360257  install.ps1
+ed2444a443f5d1344e28930848172f6ef57c2a7f4e55bac3bd836e15e06d6ae6  install.sh
+ce11af89dc796057f6c2c6b03119d14d3248321a32a651be5084f857dfba24ff  tpfile-github.zip
+bffc53113fcd90112bb0ef73894a36565ef674c2a0fbef098bf2c1e019c90598  tpfile-linux-amd64
+c3120705919de3fc0f18824ec1d51a23bd239c3d34e974b86339a462d895e52e  tpfile-linux-amd64.tar.gz
+b726037055686575a620c258c8f1fc5eb7ccdc05c829afdcf71de921926b3bd3  tpfile-linux-arm64
+74203153662a8f825f7c9ba4dce7d6236b7ff74e19f72f42c3418221f60c66e4  tpfile-linux-arm64.tar.gz
+fe56bc152ea5856059ab1116b04adc2031a73f844402ebf2ca5acac831eeb318  tpfile-windows-amd64.exe
+8be2a0551142350b0f79be8f7d8566121adc351c019166bcb595e667a6ca35ed  tpfile-windows-amd64.zip
+ea3098ef8488691ca2ea64a2ab71fc10c11878dff00576b7a55859663f960b5a  tpfile-windows-arm64.exe
+baab2e898a76008ede5166e1a476c7413e6c4f35a24fad747c5b361332fca19e  tpfile-windows-arm64.zip
 ```
 
 ## 版本

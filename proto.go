@@ -11,9 +11,17 @@ const (
 	protoVersion = 2
 	maxHeaderLen = 1 << 20 // 1 MiB，防止恶意超大头
 	ackOK        = "ok\n"  // 分块写入成功的确认
+
+	// pullProtoVer 是支持"服务端推送（客户端主动拉取）"的客户端能力版本。
+	// 旧客户端 hello 不带 V 字段，视为 0；服务端推送前会检查对方版本。
+	pullProtoVer = 3
+	// chunkDirOut 表示分块连接的方向为"服务端 -> 客户端"（客户端发起拉取）。
+	chunkDirOut = "out"
 )
 
-// chunkHeader 是每个分块连接的首部（JSON + 换行），随后紧跟分块数据，服务端写完分块后回复 "ok\n"。
+// chunkHeader 是每个分块连接的首部（JSON + 换行），随后紧跟分块数据；默认方向为
+// "客户端 -> 服务端"（上传），服务端写完分块后回复 "ok\n"；Dir 为 "out" 时方向相反，
+// 由客户端发起拉取，服务端直接在该连接上写出分块数据。
 type chunkHeader struct {
 	V      int    `json:"v"`      // 协议版本
 	ID     string `json:"id"`     // 传输 ID（一次文件传输的所有分块共用）
@@ -24,12 +32,14 @@ type chunkHeader struct {
 	Chunks int    `json:"chunks"` // 分块总数
 	Start  int64  `json:"start"`  // 本分块在文件中的起始偏移
 	Len    int64  `json:"len"`    // 本分块字节数
+	Dir    string `json:"dir,omitempty"` // "out" 表示服务端 -> 客户端（拉取）
 }
 
 // ctrlMsg 是控制连接上的会话消息（JSON + 换行）。
-// type: hello / bye / kick / ping / pong / ls_req / ls_resp / send
+// type: hello / bye / kick / ping / pong / ls_req / ls_resp / send / pull / pull_done
 type ctrlMsg struct {
 	Type    string   `json:"type"`
+	V       int      `json:"v,omitempty"`       // 客户端能力版本（hello 时上报）
 	Token   string   `json:"token,omitempty"`   // 会话令牌
 	Name    string   `json:"name,omitempty"`    // 文件/目录路径
 	Size    int64    `json:"size,omitempty"`    // 文件大小

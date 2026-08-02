@@ -173,6 +173,23 @@ func (r *receiver) finishTransfer(tr *transfer) {
 	r.noteGroupDone(tr.name, tr.size)
 }
 
+// abortTransfer 中止一个未完成的传输：从注册表移除并关闭文件（不输出完成日志）。
+func (r *receiver) abortTransfer(tr *transfer) {
+	r.regMu.Lock()
+	if _, ok := r.reg[tr.id]; !ok {
+		r.regMu.Unlock()
+		return
+	}
+	delete(r.reg, tr.id)
+	r.regMu.Unlock()
+	tr.f.Close()
+	r.grpMu.Lock()
+	if g := r.groups[groupOf(tr.name)]; g != nil && g.active > 0 {
+		g.active--
+	}
+	r.grpMu.Unlock()
+}
+
 func (r *receiver) isCompleted(id string) bool {
 	r.compMu.Lock()
 	defer r.compMu.Unlock()
@@ -640,4 +657,101 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	n, err := c.w.Write(p)
 	c.bp.add(int64(n))
 	return n, err
+}
+
+// pullFile 从服务端拉取一个文件（客户端主动发起分块连接，方向为服务端 -> 客户端）。
+// 文件保存路径由 rcv 决定，进度复用接收引擎渲染。
+func pullFile(ctx context.Context, dial func() (net.Conn, error), token string, rcv *receiver, name string, size int64, threads, retries int, verbose bool) error {
+	chunks := chunkPlan(size, threads)
+	id := randomID()
+	h := chunkHeader{V: protoVersion, ID: id, User: token, Name: name, Size: size, Chunks: len(chunks)}
+	tr, err := rcv.getTransfer(h)
+	if err != nil {
+		return err
+	}
+
+	ctxC, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		wg       sync.WaitGroup
+		errMu    sync.Mutex
+		firstErr error
+	)
+	for i, c := range chunks {
+		wg.Add(1)
+		go func(idx int, c chunk) {
+			defer wg.Done()
+			var lastErr error
+			for attempt := 1; ; attempt++ {
+				err := pullChunk(ctxC, dial, token, tr, idx, c)
+				if err == nil {
+					// 与上传接收一致：每个成功分块计数一次，最后一个触发完成
+					if rcv.chunkDone(tr, idx) {
+						rcv.finishTransfer(tr)
+					}
+					return
+				}
+				lastErr = err
+				if attempt > retries {
+					break
+				}
+				if verbose {
+					printLine("  分块 %d/%d 第 %d 次尝试失败: %v", idx+1, len(chunks), attempt, err)
+				}
+				select {
+				case <-ctxC.Done():
+					return
+				case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
+				}
+			}
+			if lastErr != nil {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("分块 %d/%d: %w", idx+1, len(chunks), lastErr)
+				}
+				errMu.Unlock()
+			}
+		}(i, c)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		rcv.abortTransfer(tr)
+		return firstErr
+	}
+	return nil
+}
+
+// pullChunk 通过一条连接拉取一个分块：先写头部，再读取服务端写出的数据并落盘。
+func pullChunk(ctx context.Context, dial func() (net.Conn, error), token string, tr *transfer, idx int, c chunk) error {
+	conn, err := dial()
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+		}
+	}()
+	defer close(done)
+
+	h := chunkHeader{V: protoVersion, ID: tr.id, User: token, Name: tr.name, Size: tr.size, Chunk: idx, Chunks: tr.total, Start: c.start, Len: c.len, Dir: chunkDirOut}
+	if err := writeHeader(conn, h); err != nil {
+		return err
+	}
+	tr.last.Store(time.Now().UnixNano())
+	if c.len > 0 {
+		conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
+		w := &offsetWriter{f: tr.f, off: c.start, tr: tr}
+		if _, err := io.CopyN(w, conn, c.len); err != nil {
+			return err
+		}
+	}
+	tr.last.Store(time.Now().UnixNano())
+	return nil
 }

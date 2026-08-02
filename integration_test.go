@@ -65,7 +65,7 @@ func connectUser(t *testing.T, addr string, inPort int, token string) (net.Conn,
 	if token == "" {
 		token = randomID()
 	}
-	if err := writeJSONLine(conn, ctrlMsg{Type: "hello", Token: token, Port: inPort}); err != nil {
+	if err := writeJSONLine(conn, ctrlMsg{Type: "hello", V: pullProtoVer, Token: token, Port: inPort}); err != nil {
 		t.Fatal(err)
 	}
 	return conn, token
@@ -251,8 +251,10 @@ func TestServerPush(t *testing.T) {
 	root := t.TempDir()
 	dst := filepath.Join(root, "dst")
 	clientDir := filepath.Join(root, "client")
+	os.MkdirAll(dst, 0o755)
 	os.MkdirAll(clientDir, 0o755)
-	srcFile := filepath.Join(root, "push.bin")
+	// 服务端保存目录里的文件（对应服务端 ls 里看到的文件）
+	srcFile := filepath.Join(dst, "push.bin")
 	payload := make([]byte, 2<<20)
 	if _, err := rand.Read(payload); err != nil {
 		t.Fatal(err)
@@ -265,20 +267,72 @@ func TestServerPush(t *testing.T) {
 	sh, cancel := startTestServer(t, port, dst)
 	defer cancel()
 
-	token := randomID()
-	inPort, cancelRcv := runTestClientReceiver(t, clientDir, token)
-	defer cancelRcv()
-
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	conn, _ := connectUser(t, addr, inPort, token)
+	conn, token := connectUser(t, addr, 0, "")
 	defer conn.Close()
+	br := bufio.NewReaderSize(conn, 256*1024)
 
-	u := waitUser(t, sh, token)
-	sh.pushToUser(u, srcFile)
+	waitUser(t, sh, token)
 
-	waitFile(t, filepath.Join(clientDir, "push.bin"), 5*time.Second)
+	// 服务端指令: tp 文件 用户id（推送，数据连接由客户端发起）
+	if !sh.execTp([]string{"tp", "push.bin", "1"}) {
+		t.Fatal("tp 返回 false")
+	}
+	m := readCtrl(t, br)
+	if m.Type != "pull" || m.Name != "push.bin" || m.Size != int64(len(payload)) {
+		t.Fatalf("意外消息: %+v", m)
+	}
+
+	// 客户端按 pull 消息主动建立分块连接拉取
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	defer cancelCtx()
+	rcv := newReceiver(clientDir, "客户端", false)
+	go rcv.progressLoop(ctx)
+	go rcv.watchdog(ctx)
+	go rcv.settleGroups(ctx)
+	if err := pullFile(ctx, dialAddr(addr), token, rcv, m.Name, m.Size, 4, 2, false); err != nil {
+		t.Fatalf("拉取失败: %v", err)
+	}
+	rcv.closeAll()
+
 	if got := sha256file(t, filepath.Join(clientDir, "push.bin")); got != sha256file(t, srcFile) {
 		t.Fatal("推送文件内容不一致")
+	}
+}
+
+// TestServerPushOldClient 验证旧版客户端（未上报能力版本）会被提示更新，而不是静默失败。
+func TestServerPushOldClient(t *testing.T) {
+	root := t.TempDir()
+	dst := filepath.Join(root, "dst")
+	os.MkdirAll(dst, 0o755)
+	os.WriteFile(filepath.Join(dst, "old.bin"), []byte("data"), 0o644)
+
+	port := freePort(t)
+	sh, cancel := startTestServer(t, port, dst)
+	defer cancel()
+
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	tok := randomID()
+	if err := writeJSONLine(conn, ctrlMsg{Type: "hello", Token: tok, Port: 0}); err != nil {
+		t.Fatal(err)
+	}
+	u := waitUser(t, sh, tok)
+	if u == nil || u.ver != 0 {
+		t.Fatalf("旧客户端应注册为 ver=0: %+v", u)
+	}
+	if !sh.execTp([]string{"tp", "old.bin", "1"}) {
+		t.Fatal("tp 返回 false")
+	}
+	// 旧客户端不应收到 pull 消息（版本检查拒绝）
+	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	line, _ := readLineLimited(bufio.NewReader(conn), maxHeaderLen)
+	if len(line) > 0 {
+		t.Fatalf("旧客户端不应收到拉取通知: %s", line)
 	}
 }
 

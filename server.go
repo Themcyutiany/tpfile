@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ type user struct {
 	wmu    sync.Mutex // 保护 conn 写入
 	ip     string
 	inPort int // 客户端入站传输端口（0 表示不支持接收推送）
+	ver    int // 客户端能力版本（hello 时上报，旧客户端为 0）
 }
 
 // serverShell 服务端状态：监听、用户管理、接收引擎。
@@ -138,6 +140,11 @@ func (sh *serverShell) dispatchConn(ctx context.Context, conn net.Conn) {
 		if !sh.validToken(h.User) {
 			return
 		}
+		if h.Dir == chunkDirOut {
+			// 客户端发起的拉取：服务端在连接上直接写出分块数据
+			sh.servePullChunk(conn, h)
+			return
+		}
 		sh.rcv.handleChunkConn(conn, br, h)
 		return
 	}
@@ -180,7 +187,7 @@ func (sh *serverShell) registerUser(conn net.Conn, m ctrlMsg) *user {
 	for sh.tokenExistsLocked(token) {
 		token = randomID()
 	}
-	u := &user{id: sh.nextID, token: token, conn: conn, ip: hostOf(conn.RemoteAddr().String()), inPort: m.Port}
+	u := &user{id: sh.nextID, token: token, conn: conn, ip: hostOf(conn.RemoteAddr().String()), inPort: m.Port, ver: m.V}
 	sh.nextID++
 	sh.users[u.id] = u
 	return u
@@ -243,8 +250,14 @@ func (sh *serverShell) handleCtrl(u *user, m ctrlMsg) bool {
 	case "ls_resp":
 		printList(fmt.Sprintf("[用户 %d] 的目录:", u.id), m.Entries)
 	case "send":
-		// 客户端 tp -me: 服务端把文件推送给客户端
+		// 客户端 tp -me: 服务端把文件推送给客户端（客户端主动拉取）
 		go sh.pushToUser(u, m.Name)
+	case "pull_done":
+		if m.Msg != "" {
+			printErr("[用户 %d] 接收 %s 失败: %s", u.id, m.Name, m.Msg)
+		} else {
+			printOK("[用户 %d] 已接收 %s", u.id, m.Name)
+		}
 	case "bye":
 		return false
 	default:
@@ -413,17 +426,18 @@ func (sh *serverShell) execTp(fields []string) bool {
 		sh.sendCtrl(u, ctrlMsg{Type: "send", Name: path})
 		return true
 	}
-	// 推送: 服务端文件发给客户端
-	if u.inPort == 0 {
-		printErr("用户 %d 未开放接收端口，无法推送", id)
-		return true
-	}
+	// 推送: 通知客户端主动拉取（数据连接由客户端发起，NAT 下也能通）
 	go sh.pushToUser(u, path)
 	return true
 }
 
-// pushToUser 把服务端文件推送给指定用户（服务端作为发送端）。
+// pushToUser 把服务端文件推送给指定用户。为避免服务端主动连接客户端
+// （NAT/防火墙后连不通），改为通知客户端主动发起拉取连接。
 func (sh *serverShell) pushToUser(u *user, path string) {
+	if u.ver < pullProtoVer {
+		printErr("用户 %d 的 tpfile 版本过旧，请对方更新到最新版后再试", u.id)
+		return
+	}
 	full := path
 	if !filepath.IsAbs(path) {
 		// 相对路径基于服务端保存目录，与 ls 显示一致
@@ -434,18 +448,51 @@ func (sh *serverShell) pushToUser(u *user, path string) {
 		printErr("发送 %s 给用户 %d 失败: %v", path, u.id, err)
 		return
 	}
-	ip := u.ip
-	if ip == "" {
-		ip = "127.0.0.1"
+	for _, it := range items {
+		// 逐文件通知客户端拉取；客户端拉完会回报 pull_done
+		sh.sendCtrl(u, ctrlMsg{Type: "pull", Name: filepath.ToSlash(it.rel), Size: it.size})
 	}
-	dial := func() (net.Conn, error) {
-		return net.DialTimeout("tcp", net.JoinHostPort(ip, strconv.Itoa(u.inPort)), 5*time.Second)
-	}
-	if err := sendItems(sh.ctx, dial, u.token, items, sh.threads, sh.retries, sh.jobs, sh.verbose); err != nil {
-		printErr("发送 %s 给用户 %d 失败: %v", path, u.id, err)
+	printOK("已通知用户 %d 拉取 %s (%d 个文件)", u.id, path, len(items))
+}
+
+// servePullChunk 响应客户端的一条拉取分块连接：校验路径后直接写出分块数据。
+func (sh *serverShell) servePullChunk(conn net.Conn, h chunkHeader) {
+	if h.Start < 0 || h.Len < 0 || h.Start+h.Len > h.Size {
 		return
 	}
-	printOK("已发送 %s 给用户 %d (%d 个文件)", path, u.id, len(items))
+	rel, err := sanitizeRelPath(h.Name)
+	if err != nil {
+		return
+	}
+	full := filepath.Join(sh.dir, filepath.FromSlash(rel))
+	if !withinDir(sh.dir, full) {
+		return
+	}
+	fi, err := os.Stat(full)
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() != h.Size {
+		return
+	}
+	f, err := os.Open(full)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Minute))
+	if h.Len > 0 {
+		if _, err := io.Copy(conn, io.NewSectionReader(f, h.Start, h.Len)); err != nil {
+			return
+		}
+	}
+	// 写完即关闭（由调用方 defer conn.Close() 处理），客户端读满即可
+}
+
+// withinDir 判断 path 是否位于 base 目录之内（防目录穿越）。
+func withinDir(base, path string) bool {
+	rel, err := filepath.Rel(base, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func (sh *serverShell) listUsers() {
