@@ -28,27 +28,17 @@ jobs:
       - name: Test
         run: go test ./... -count=1
 
-      - name: Build and pack binaries (zip / tar.gz)
-        run: make pack
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: tpfile-binaries
-          path: dist/
-
+  # 发布任务：把仓库 dist/ 目录中维护好的发布文件（与 sha256sums.txt 一一对应）
+  # 原样上传到对应 tag 的发布页，保证发布资产与校验清单永远一致。
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: tpfile-binaries
-          path: dist
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Publish release
+      - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
