@@ -124,19 +124,22 @@ func clearPromptFlag() {
 }
 
 // drawInputLocked 重绘提示行（进度条存在时一并重绘），调用方需持有 outMu。
+// 整行拼成一次写入，减少逐字节刷屏带来的输入卡顿。
 func drawInputLocked() {
-	fmt.Fprint(os.Stdout, "\r\x1b[2K")
+	var sb strings.Builder
+	sb.WriteString("\r\x1b[2K")
 	if progressLive && lastBarLine != "" {
-		fmt.Fprint(os.Stdout, lastBarLine)
-		fmt.Fprint(os.Stdout, " ")
+		sb.WriteString(lastBarLine)
+		sb.WriteString(" ")
 	}
-	fmt.Fprint(os.Stdout, paint(promptColor, "> "))
+	sb.WriteString(paint(promptColor, "> "))
 	if editActive {
-		fmt.Fprint(os.Stdout, string(editBuf))
+		sb.WriteString(string(editBuf))
 		if editPos < runeLen(string(editBuf)) {
-			fmt.Fprintf(os.Stdout, "\x1b[%dD", runeLen(string(editBuf))-editPos)
+			fmt.Fprintf(&sb, "\x1b[%dD", runeLen(string(editBuf))-editPos)
 		}
 	}
+	fmt.Fprint(os.Stdout, sb.String())
 	promptOnScreen = true
 }
 

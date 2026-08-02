@@ -8,10 +8,17 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
 )
+
+// inputEvent 表示来自常驻输入读取协程的一个事件。
+type inputEvent struct {
+	b   byte // 一个输入字节
+	eof bool // stdin 已关闭/出错
+}
 
 // readLines 启动一个 goroutine 读取用户的命令行输入（终端下带 Tab 补全、
 // 左右移动等编辑能力；非终端自动退化为逐行扫描）。
@@ -36,9 +43,14 @@ func readLines(ctx context.Context) <-chan string {
 }
 
 // lineReader 统一终端交互读取与非终端逐行读取。
+// 终端模式下整个会话只启动一个常驻读取协程（startInputReader），通过 armed
+// 开关决定是否把按键送入编辑通道。这样全程只有一个读取者，不会出现多个
+// 阻塞在 stdin 上的协程互相争抢输入（表现为打不进字、Ctrl+C 失效）。
 type lineReader struct {
 	inter   bool
 	scanner *bufio.Scanner
+	inputCh chan inputEvent
+	armed   *atomic.Bool
 }
 
 func newLineReader() *lineReader {
@@ -47,6 +59,9 @@ func newLineReader() *lineReader {
 	lr.inter = isTerminal(os.Stdin) && isTerminal(os.Stdout) && colorOn && setRawMode(true)
 	if lr.inter {
 		setRawMode(false) // 每次 readLineInteractive 再进入原始模式
+		lr.inputCh = make(chan inputEvent, 512)
+		lr.armed = &atomic.Bool{}
+		startInputReader(lr.inputCh, lr.armed)
 	} else {
 		lr.scanner = bufio.NewScanner(os.Stdin)
 	}
@@ -60,12 +75,12 @@ func (lr *lineReader) next() (string, bool) {
 		}
 		return strings.TrimSpace(lr.scanner.Text()), true
 	}
-	return readLineInteractive()
+	return readLineInteractive(lr.inputCh, lr.armed)
 }
 
 // readLineInteractive 在原始模式下读取一行：支持左右/Home/End 移动光标、
 // 退格、删除、Ctrl+D、Tab 补全本地文件路径、Ctrl+C(输出 stop)。
-func readLineInteractive() (string, bool) {
+func readLineInteractive(inputCh chan inputEvent, armed *atomic.Bool) (string, bool) {
 	if !setRawMode(true) {
 		return readLineScanner()
 	}
@@ -77,24 +92,24 @@ func readLineInteractive() (string, bool) {
 	editPos = 0
 	promptDirty = false
 	outMu.Unlock()
+	armed.Store(true)
 
-	byteCh := make(chan byte, 64)
-	go func() {
-		buf := make([]byte, 1)
-		for {
-			n, err := os.Stdin.Read(buf)
-			if n > 0 {
-				select {
-				case byteCh <- buf[0]:
-				default:
-				}
+	// 丢弃上一行遗留的按键字节，保证每行从干净状态开始
+drainStale:
+	for {
+		select {
+		case ev := <-inputCh:
+			if ev.eof {
+				armed.Store(false)
+				outMu.Lock()
+				editActive = false
+				outMu.Unlock()
+				return "", false
 			}
-			if err != nil {
-				close(byteCh)
-				return
-			}
+		default:
+			break drainStale
 		}
-	}()
+	}
 
 	tick := time.NewTicker(80 * time.Millisecond)
 	defer tick.Stop()
@@ -105,44 +120,52 @@ func readLineInteractive() (string, bool) {
 		pending  []byte // UTF-8 多字节输入缓冲
 	)
 
+	finish := func(line string) (string, bool) {
+		armed.Store(false)
+		outMu.Lock()
+		editActive = false
+		promptOnScreen = false
+		outMu.Unlock()
+		return line, true
+	}
+
 	for {
 		select {
-		case b, ok := <-byteCh:
-			if !ok {
+		case ev, ok := <-inputCh:
+			if !ok || ev.eof {
+				armed.Store(false)
 				outMu.Lock()
 				editActive = false
 				outMu.Unlock()
 				return "", false
 			}
-			if len(escBuf) > 0 {
-				escBuf = append(escBuf, b)
-				if done, esc := consumeEscSeq(escBuf); done {
-					handleEscSeq(esc)
-					escBuf = nil
-				} else if !isEscPrefix(escBuf) {
-					escBuf = nil // 不是合法转义序列，丢弃
+			done, line, redraw := applyKey(ev.b, &escBuf, &escStart, &pending)
+			// 同一批次内连续到达的按键合并成一次重绘，避免快速输入时逐字节刷屏
+			for !done {
+				select {
+				case ev2, ok2 := <-inputCh:
+					if !ok2 || ev2.eof {
+						armed.Store(false)
+						outMu.Lock()
+						editActive = false
+						outMu.Unlock()
+						return "", false
+					}
+					var rd bool
+					done, line, rd = applyKey(ev2.b, &escBuf, &escStart, &pending)
+					redraw = redraw || rd
+				default:
+					goto drained
 				}
-				continue
 			}
-			switch {
-			case b == 0x1b:
-				escBuf = append(escBuf, b)
-				escStart = time.Now()
-			case b >= 0x80:
-				pending = append(pending, b)
-				if utf8.FullRune(pending) {
-					r, _ := utf8.DecodeRune(pending)
-					pending = pending[:0]
-					insertEditRune(r)
-				}
-			default:
-				if done, line := handleCtrlKey(b); done {
-					outMu.Lock()
-					editActive = false
-					promptOnScreen = false
-					outMu.Unlock()
-					return line, true
-				}
+		drained:
+			if done {
+				return finish(line)
+			}
+			if redraw {
+				outMu.Lock()
+				drawInputLocked()
+				outMu.Unlock()
 			}
 		case <-tick.C:
 			outMu.Lock()
@@ -152,7 +175,7 @@ func readLineInteractive() (string, bool) {
 			}
 			outMu.Unlock()
 			if len(escBuf) > 0 && time.Since(escStart) > 100*time.Millisecond {
-				escBuf = nil // 单独按 ESC 无后续，丢弃
+				escBuf = nil
 			}
 		}
 	}
@@ -167,50 +190,86 @@ func readLineScanner() (string, bool) {
 	return strings.TrimSpace(sc.Text()), true
 }
 
-// handleCtrlKey 处理控制字节；返回 done=true 表示一行输入结束。
-func handleCtrlKey(b byte) (bool, string) {
+// applyKey 处理一个输入字节（或转义序列片段），更新编辑缓冲与光标。
+// 返回 done=true 表示一行输入结束（line 为最终内容）；redraw=true 表示缓冲
+// 发生变化、调用方需要重绘提示行。Tab 与转义序列内部自行重绘。
+func applyKey(b byte, escBuf *[]byte, escStart *time.Time, pending *[]byte) (bool, string, bool) {
+	if len(*escBuf) > 0 {
+		*escBuf = append(*escBuf, b)
+		if doneSeq, esc := consumeEscSeq(*escBuf); doneSeq {
+			handleEscSeq(esc)
+			*escBuf = nil
+			return false, "", false
+		}
+		if !isEscPrefix(*escBuf) {
+			*escBuf = nil // 不是合法转义序列，丢弃
+		}
+		return false, "", false
+	}
+	switch {
+	case b == 0x1b:
+		*escBuf = append(*escBuf, b)
+		*escStart = time.Now()
+		return false, "", false
+	case b >= 0x80:
+		*pending = append(*pending, b)
+		if utf8.FullRune(*pending) {
+			r, _ := utf8.DecodeRune(*pending)
+			*pending = (*pending)[:0]
+			outMu.Lock()
+			insertEditRuneLocked(r)
+			outMu.Unlock()
+			return false, "", true
+		}
+		return false, "", false
+	}
+
 	outMu.Lock()
 	defer outMu.Unlock()
 	switch b {
 	case 0x03: // Ctrl+C
 		fmt.Fprint(os.Stdout, "\r\n")
 		promptOnScreen = false
-		return true, "stop"
+		return true, "stop", false
 	case 0x04: // Ctrl+D：空行 EOF，否则删除光标处字符
 		if len(editBuf) == 0 {
 			fmt.Fprint(os.Stdout, "\r\n")
 			promptOnScreen = false
-			return true, ""
+			return true, "", false
 		}
 		if editPos < len(editBuf) {
 			editBuf = append(editBuf[:editPos], editBuf[editPos+1:]...)
-			drawInputLocked()
+			return false, "", true
 		}
 	case 0x0d, 0x0a: // Enter
 		fmt.Fprint(os.Stdout, "\r\n")
 		promptOnScreen = false
-		return true, string(editBuf)
+		return true, string(editBuf), false
 	case 0x7f, 0x08: // Backspace
 		if editPos > 0 {
 			editBuf = append(editBuf[:editPos-1], editBuf[editPos:]...)
 			editPos--
-			drawInputLocked()
+			return false, "", true
 		}
 	case 0x09: // Tab：补全本地文件路径
 		handleTabLocked()
+		return false, "", false
 	default:
 		if b >= 0x20 {
 			insertEditRuneLocked(rune(b))
+			return false, "", true
 		}
 	}
-	return false, ""
+	return false, "", false
 }
 
-// insertEditRune 插入一个可打印字符（含 UTF-8 多字节）。
-func insertEditRune(r rune) {
-	outMu.Lock()
-	defer outMu.Unlock()
-	insertEditRuneLocked(r)
+// handleCtrlKey 处理单个控制字节（测试与兼容入口，不负责重绘）。
+func handleCtrlKey(b byte) (bool, string) {
+	var escBuf []byte
+	var escStart time.Time
+	var pending []byte
+	done, line, _ := applyKey(b, &escBuf, &escStart, &pending)
+	return done, line
 }
 
 func insertEditRuneLocked(r rune) {
@@ -221,7 +280,6 @@ func insertEditRuneLocked(r rune) {
 	copy(editBuf[editPos+1:], editBuf[editPos:])
 	editBuf[editPos] = r
 	editPos++
-	drawInputLocked()
 }
 
 // handleTabLocked 执行 Tab 补全：唯一匹配直接补全；多匹配先补公共前缀，
@@ -325,7 +383,8 @@ func commonPrefix(ss []string) string {
 // consumeEscSeq 判断 escBuf 是否构成完整的终端转义序列。
 func consumeEscSeq(buf []byte) (bool, []byte) {
 	switch string(buf) {
-	case "\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D", "\x1b[H", "\x1b[F", "\x1b[3~":
+	case "\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D", "\x1b[H", "\x1b[F", "\x1b[3~", "\x1b[Z",
+		"\x1b[1~", "\x1b[2~", "\x1b[4~", "\x1b[5~", "\x1b[6~":
 		return true, append([]byte(nil), buf...)
 	}
 	return false, nil
@@ -373,5 +432,7 @@ func handleEscSeq(seq []byte) {
 			editBuf = append(editBuf[:editPos], editBuf[editPos+1:]...)
 			drawInputLocked()
 		}
+	case "\x1b[Z": // Shift+Tab：等同 Tab
+		handleTabLocked()
 	}
 }

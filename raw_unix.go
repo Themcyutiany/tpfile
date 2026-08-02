@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 )
@@ -46,4 +47,24 @@ func setRawMode(raw bool) bool {
 		return false
 	}
 	return true
+}
+
+// startInputReader 启动整个会话唯一一个终端输入读取协程。
+// 仅在 armed 为 true（行编辑器激活）时把按键字节送入通道；其余时间读取并
+// 丢弃，避免输入在行与行之间堆积，也避免多个阻塞读取者互相争抢输入
+// （表现为打不进字、Ctrl+C 失效）。
+func startInputReader(ch chan<- inputEvent, armed *atomic.Bool) {
+	go func() {
+		buf := make([]byte, 1)
+		for {
+			n, err := os.Stdin.Read(buf)
+			if n > 0 && armed.Load() {
+				ch <- inputEvent{b: buf[0]}
+			}
+			if err != nil {
+				ch <- inputEvent{eof: true}
+				return
+			}
+		}
+	}()
 }

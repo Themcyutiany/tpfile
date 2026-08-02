@@ -177,19 +177,25 @@ tpfile/
 以下是所有发布文件的 SHA-256 校验值（与 `sha256sums.txt` 内容一致，可用于校验下载完整性）：
 
 ```
-4a5b5439578f2051935d14191dc4ee18903e2ea4a0d891a07464517cca2d6b3f  install.ps1
-1fbeb98df328f324ba2ad53236bd1f726abcd1f888bf0b9ac6af00cfa630c097  install.sh
-89d82f07c29e5d8625f883208b63a62637863172c05eae3b9619ccba484c1ed4  tpfile-github.zip
-d3b184c29f675f4708d614d75aaacf4f9bf24879a8aa0eead6b384c5ac1a0631  tpfile-linux-amd64
-a3d15cb6e2cdcbe672c53d664a12d7cb5040385bf10725d17ce60a5aba3e0a2b  tpfile-linux-amd64.tar.gz
-3970c80f04d596fd13017c9b61d2b4a7e0d6be9406838220c993113c79c23a9e  tpfile-linux-arm64
-346565f9b7dffe3b342047d5796eda4cd21ec8c6dfd0ca472feaae5895200f15  tpfile-linux-arm64.tar.gz
-450b4f40952bd4cb2e6f6e39c7566b79d96f8117297ed75e56b6e5fca228e96c  tpfile-windows-amd64.exe
-5264f28148552021124b16f5273385fead28b1cf07cba15c37444c96058a0897  tpfile-windows-amd64.zip
-1ac12eb71e58055d8797c9034e4cb911b3423a24d9dd5f77028825304e158301  tpfile-windows-arm64.exe
-5d21cdab5a479a5bb3e4becf6fe8db5794cc542729aa996c9e116e607c37dd05  tpfile-windows-arm64.zip
+34454ef6eed22f8a125fc349896597e3612243906e2a91c696de5ef9211f58be  install.ps1
+66f894e4b388147f5e4404127e0c9c0c9c80026c3831646643bcb043273fbd47  install.sh
+06d9eb7f7b459c0f5790bc7760f47cc58f530dd95a7941ef10b2f655e8fbd441  tpfile-github.zip
+ebb5ec3bf7c066d024e29e67f4c3c5305c3438f82033dd54b58ef862143153cd  tpfile-linux-amd64
+9f73adb4d2e10d1ad202b62b33b87886d9dc0132a6ac5a161c223af73e513dc4  tpfile-linux-amd64.tar.gz
+7ad7ec91e0163e6ea1a26c83f27e1b7eda51c99ac120f4f0f53f31f300478356  tpfile-linux-arm64
+b35877d9f4b923e4b57db25b6c4cdc55016fa58c58e070fb9184bf0d83724b09  tpfile-linux-arm64.tar.gz
+bf84fbfad5f29df532be7c866335d136a957212aa9fc1f24c838457ef7466654  tpfile-windows-amd64.exe
+657589bcaf2f7aa256463c77cecf807cc29bbd2cd0a93435d1b7719aa4153ece  tpfile-windows-amd64.zip
+c6effc37c3a25063a9ddc333cdb494741397b1e6aea78186d66f1806a911489a  tpfile-windows-arm64.exe
+77e0203d497f91d1382ad9e1dd4e587ea141be1a002a6353833bec2dccbdc755  tpfile-windows-arm64.zip
 ```
 
 ## 版本
 
-v1.4.0
+v1.4.1（修复：输入卡顿 / 无法输入指令 / Ctrl+C 失效 / Tab 补全不稳定）
+
+- 输入改为会话级单一读取协程，修复多个读取者抢输入导致打不进字、Ctrl+C 失效的问题
+- Windows 改用控制台按键记录读取（ReadConsoleInputW），消除输入延迟，Tab 补全稳定可用
+- 快速输入时按键合并为一次重绘，减少逐字刷屏卡顿
+
+历史版本：v1.4.0、v1.3.1、v1.3.0、v1.2.0、v1.1.0、v1.00
