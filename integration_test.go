@@ -290,13 +290,67 @@ func TestServerPush(t *testing.T) {
 	go rcv.progressLoop(ctx)
 	go rcv.watchdog(ctx)
 	go rcv.settleGroups(ctx)
-	if err := pullFile(ctx, dialAddr(addr), token, rcv, m.Name, m.Size, 4, 2, false); err != nil {
+	if err := pullFile(ctx, dialAddr(addr), token, rcv, m.Name, m.Size, m.Auth, 4, 2, false); err != nil {
 		t.Fatalf("拉取失败: %v", err)
 	}
 	rcv.closeAll()
 
 	if got := sha256file(t, filepath.Join(clientDir, "push.bin")); got != sha256file(t, srcFile) {
 		t.Fatal("推送文件内容不一致")
+	}
+}
+
+// TestServerPushAbsPath 验证服务端可推送保存目录之外的绝对路径文件。
+func TestServerPushAbsPath(t *testing.T) {
+	root := t.TempDir()
+	dst := filepath.Join(root, "dst")
+	clientDir := filepath.Join(root, "client")
+	outside := filepath.Join(root, "outside")
+	os.MkdirAll(dst, 0o755)
+	os.MkdirAll(clientDir, 0o755)
+	os.MkdirAll(outside, 0o755)
+	// 文件在保存目录之外
+	srcFile := filepath.Join(outside, "cpu.zip")
+	payload := make([]byte, 3<<20)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(srcFile, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	port := freePort(t)
+	sh, cancel := startTestServer(t, port, dst)
+	defer cancel()
+
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	conn, token := connectUser(t, addr, 0, "")
+	defer conn.Close()
+	br := bufio.NewReaderSize(conn, 256*1024)
+
+	waitUser(t, sh, token)
+
+	if !sh.execTp([]string{"tp", srcFile, "1"}) {
+		t.Fatal("tp 返回 false")
+	}
+	m := readCtrl(t, br)
+	if m.Type != "pull" || m.Name != "cpu.zip" || m.Size != int64(len(payload)) || m.Auth == "" {
+		t.Fatalf("意外消息: %+v", m)
+	}
+
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	defer cancelCtx()
+	rcv := newReceiver(clientDir, "客户端", false)
+	go rcv.progressLoop(ctx)
+	go rcv.watchdog(ctx)
+	go rcv.settleGroups(ctx)
+	if err := pullFile(ctx, dialAddr(addr), token, rcv, m.Name, m.Size, m.Auth, 4, 2, false); err != nil {
+		t.Fatalf("拉取失败: %v", err)
+	}
+	rcv.closeAll()
+
+	if got := sha256file(t, filepath.Join(clientDir, "cpu.zip")); got != sha256file(t, srcFile) {
+		t.Fatal("绝对路径推送内容不一致")
 	}
 }
 

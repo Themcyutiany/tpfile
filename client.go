@@ -155,7 +155,7 @@ func (sh *clientShell) handleCtrl(m ctrlMsg) bool {
 		return true
 	case "pull":
 		// 服务端 tp 文件 用户id: 通知本机主动拉取（数据连接由客户端发起，NAT 下也能通）
-		go sh.pullFromServer(m.Name, m.Size)
+		go sh.pullFromServer(m.Name, m.Size, m.Auth)
 		return true
 	default:
 		printLine("未知控制消息: %s", m.Type)
@@ -233,7 +233,7 @@ func (sh *clientShell) sendLocal(ctx context.Context, path string) {
 }
 
 // pullFromServer 响应服务端推送：以客户端为发起方，向服务端建立分块连接拉取文件。
-func (sh *clientShell) pullFromServer(name string, size int64) {
+func (sh *clientShell) pullFromServer(name string, size int64, auth string) {
 	if size < 0 {
 		printErr("拉取 %s 失败: 文件大小无效", name)
 		return
@@ -243,12 +243,12 @@ func (sh *clientShell) pullFromServer(name string, size int64) {
 	}
 	ctx, cancel := context.WithTimeout(sh.ctx, 30*time.Minute)
 	defer cancel()
-	if err := pullFile(ctx, dial, sh.token, sh.rcv, name, size, sh.threads, sh.retries, sh.verbose); err != nil {
-		writeJSONLine(sh.conn, ctrlMsg{Type: "pull_done", Name: name, Msg: err.Error()})
+	if err := pullFile(ctx, dial, sh.token, sh.rcv, name, size, auth, sh.threads, sh.retries, sh.verbose); err != nil {
+		writeJSONLine(sh.conn, ctrlMsg{Type: "pull_done", Auth: auth, Name: name, Msg: err.Error()})
 		printErr("拉取 %s 失败: %v", name, err)
 		return
 	}
-	writeJSONLine(sh.conn, ctrlMsg{Type: "pull_done", Name: name})
+	writeJSONLine(sh.conn, ctrlMsg{Type: "pull_done", Auth: auth, Name: name})
 	printOK("已从服务端接收 %s", name)
 }
 

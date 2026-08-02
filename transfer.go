@@ -661,7 +661,7 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 
 // pullFile 从服务端拉取一个文件（客户端主动发起分块连接，方向为服务端 -> 客户端）。
 // 文件保存路径由 rcv 决定，进度复用接收引擎渲染。
-func pullFile(ctx context.Context, dial func() (net.Conn, error), token string, rcv *receiver, name string, size int64, threads, retries int, verbose bool) error {
+func pullFile(ctx context.Context, dial func() (net.Conn, error), token string, rcv *receiver, name string, size int64, auth string, threads, retries int, verbose bool) error {
 	chunks := chunkPlan(size, threads)
 	id := randomID()
 	h := chunkHeader{V: protoVersion, ID: id, User: token, Name: name, Size: size, Chunks: len(chunks)}
@@ -684,7 +684,7 @@ func pullFile(ctx context.Context, dial func() (net.Conn, error), token string, 
 			defer wg.Done()
 			var lastErr error
 			for attempt := 1; ; attempt++ {
-				err := pullChunk(ctxC, dial, token, tr, idx, c)
+				err := pullChunk(ctxC, dial, token, tr, idx, c, auth)
 				if err == nil {
 					// 与上传接收一致：每个成功分块计数一次，最后一个触发完成
 					if rcv.chunkDone(tr, idx) {
@@ -723,7 +723,7 @@ func pullFile(ctx context.Context, dial func() (net.Conn, error), token string, 
 }
 
 // pullChunk 通过一条连接拉取一个分块：先写头部，再读取服务端写出的数据并落盘。
-func pullChunk(ctx context.Context, dial func() (net.Conn, error), token string, tr *transfer, idx int, c chunk) error {
+func pullChunk(ctx context.Context, dial func() (net.Conn, error), token string, tr *transfer, idx int, c chunk, auth string) error {
 	conn, err := dial()
 	if err != nil {
 		return err
@@ -740,7 +740,7 @@ func pullChunk(ctx context.Context, dial func() (net.Conn, error), token string,
 	}()
 	defer close(done)
 
-	h := chunkHeader{V: protoVersion, ID: tr.id, User: token, Name: tr.name, Size: tr.size, Chunk: idx, Chunks: tr.total, Start: c.start, Len: c.len, Dir: chunkDirOut}
+	h := chunkHeader{V: protoVersion, ID: tr.id, User: token, Name: tr.name, Size: tr.size, Chunk: idx, Chunks: tr.total, Start: c.start, Len: c.len, Dir: chunkDirOut, Auth: auth}
 	if err := writeHeader(conn, h); err != nil {
 		return err
 	}

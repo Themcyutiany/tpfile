@@ -14,6 +14,13 @@ import (
 	"unicode/utf8"
 )
 
+// 命令历史：支持在编辑器中用 ↑ / ↓ 浏览已提交的命令。
+var (
+	history   []string // 已提交的非空命令（最新在末尾）
+	histIdx   int      // 当前浏览位置；-1 表示正在编辑新行
+	histDraft []rune   // 从历史离开时保存的原输入草稿
+)
+
 // inputEvent 表示来自常驻输入读取协程的一个事件。
 type inputEvent struct {
 	b   byte // 一个输入字节
@@ -91,6 +98,8 @@ func readLineInteractive(inputCh chan inputEvent, armed *atomic.Bool) (string, b
 	editBuf = editBuf[:0]
 	editPos = 0
 	promptDirty = false
+	histIdx = -1
+	histDraft = nil
 	outMu.Unlock()
 	armed.Store(true)
 
@@ -244,6 +253,7 @@ func applyKey(b byte, escBuf *[]byte, escStart *time.Time, pending *[]byte) (boo
 	case 0x0d, 0x0a: // Enter
 		fmt.Fprint(os.Stdout, "\r\n")
 		promptOnScreen = false
+		addHistory(string(editBuf))
 		return true, string(editBuf), false
 	case 0x7f, 0x08: // Backspace
 		if editPos > 0 {
@@ -407,6 +417,10 @@ func handleEscSeq(seq []byte) {
 	outMu.Lock()
 	defer outMu.Unlock()
 	switch string(seq) {
+	case "\x1b[A": // 上：浏览历史中更早的命令
+		histUp()
+	case "\x1b[B": // 下：浏览历史中更新的命令 / 回到原输入
+		histDown()
 	case "\x1b[C": // 右
 		if editPos < len(editBuf) {
 			editPos++
@@ -435,4 +449,53 @@ func handleEscSeq(seq []byte) {
 	case "\x1b[Z": // Shift+Tab：等同 Tab
 		handleTabLocked()
 	}
+}
+
+// addHistory 把提交的命令记入历史：去掉空行、去掉与上一条完全相同的重复，上限 500 条。
+func addHistory(line string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	if len(history) > 0 && history[len(history)-1] == line {
+		return
+	}
+	history = append(history, line)
+	if len(history) > 500 {
+		history = history[1:]
+	}
+}
+
+// histUp 向上浏览历史。首次按 ↑ 时保存当前输入草稿，之后逐条向前。
+// 调用方需持有 outMu。
+func histUp() {
+	if len(history) == 0 {
+		return
+	}
+	if histIdx < 0 {
+		histDraft = append([]rune(nil), editBuf...)
+		histIdx = len(history) - 1
+	} else if histIdx > 0 {
+		histIdx--
+	}
+	editBuf = []rune(history[histIdx])
+	editPos = len(editBuf)
+	drawInputLocked()
+}
+
+// histDown 向下浏览历史；到最新一条之后恢复原来的输入草稿。
+// 调用方需持有 outMu。
+func histDown() {
+	if histIdx < 0 {
+		return
+	}
+	if histIdx < len(history)-1 {
+		histIdx++
+		editBuf = []rune(history[histIdx])
+	} else {
+		histIdx = -1
+		editBuf = append([]rune(nil), histDraft...)
+	}
+	editPos = len(editBuf)
+	drawInputLocked()
 }

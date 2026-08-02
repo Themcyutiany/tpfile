@@ -259,3 +259,52 @@ func TestDispWidth(t *testing.T) {
 	}
 }
 
+
+// TestHistoryNav 验证 ↑ / ↓ 历史命令导航与去重。
+func TestHistoryNav(t *testing.T) {
+	history = history[:0]
+	addHistory("tp a.txt")
+	addHistory("tp b.txt")
+	addHistory("tp b.txt") // 连续重复，应去重
+	addHistory("   ")      // 空白行忽略
+	if len(history) != 2 || history[0] != "tp a.txt" || history[1] != "tp b.txt" {
+		t.Fatalf("history 去重失败: %v", history)
+	}
+
+	editBuf = []rune("draft")
+	editPos = 5
+	histIdx = -1
+	histDraft = nil
+
+	histUp() // -> 最新一条 tp b.txt
+	if string(editBuf) != "tp b.txt" || histIdx != 1 {
+		t.Fatalf("histUp: %q idx=%d", string(editBuf), histIdx)
+	}
+	histUp() // -> tp a.txt
+	if string(editBuf) != "tp a.txt" || histIdx != 0 {
+		t.Fatalf("histUp2: %q idx=%d", string(editBuf), histIdx)
+	}
+	histUp() // 已到最旧，不变
+	if string(editBuf) != "tp a.txt" {
+		t.Fatalf("histUp3: %q", string(editBuf))
+	}
+	histDown() // -> tp b.txt
+	if string(editBuf) != "tp b.txt" {
+		t.Fatalf("histDown: %q", string(editBuf))
+	}
+	histDown() // -> 回到草稿 draft
+	if string(editBuf) != "draft" || histIdx != -1 {
+		t.Fatalf("histDown2: %q idx=%d", string(editBuf), histIdx)
+	}
+	histDown() // 草稿态再按 ↓ 无效果
+	if string(editBuf) != "draft" {
+		t.Fatalf("histDown3: %q", string(editBuf))
+	}
+
+	// 还原全局状态
+	history = history[:0]
+	editBuf = editBuf[:0]
+	editPos = 0
+	histIdx = -1
+	histDraft = nil
+}

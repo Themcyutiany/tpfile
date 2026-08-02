@@ -43,7 +43,31 @@ type serverShell struct {
 	users   map[int]*user
 	nextID  int
 	stopOne sync.Once
+	pullMu  sync.Mutex
+	pulls   map[string]*pullAuth  // 拉取授权令牌 -> 文件
+	pushes  map[string]*pushJob   // 推送任务 -> 发送进度
 }
+
+// pullAuth 是一次"服务端推送"的授权：客户端凭令牌拉取对应文件。
+type pullAuth struct {
+	abs   string // 服务端上的绝对路径（允许保存目录之外的文件）
+	size  int64
+	name  string // 展示用文件名
+	push  *pushJob
+	added time.Time
+}
+
+// pushJob 汇总一次推送（可含多个文件）的发送进度。
+type pushJob struct {
+	id        string
+	bp        *batchProgress
+	totalN    int
+	mu        sync.Mutex
+	doneFiles int
+	expires   time.Time
+}
+
+const pullAuthTTL = time.Hour // 拉取授权有效期，超时自动清理
 
 // startServerShell 创建服务端并开始监听（不含交互指令循环）。
 func startServerShell(ctx context.Context, port int, dir string, threads, retries, jobs int, verbose bool) (*serverShell, error) {
@@ -74,6 +98,8 @@ func startServerShell(ctx context.Context, port int, dir string, threads, retrie
 		verbose: verbose,
 		ln:      ln,
 		users:   make(map[int]*user),
+		pulls:   make(map[string]*pullAuth),
+		pushes:  make(map[string]*pushJob),
 		nextID:  1,
 	}
 	sh.rcv = newReceiver(dir, "服务端", verbose)
@@ -253,6 +279,20 @@ func (sh *serverShell) handleCtrl(u *user, m ctrlMsg) bool {
 		// 客户端 tp -me: 服务端把文件推送给客户端（客户端主动拉取）
 		go sh.pushToUser(u, m.Name)
 	case "pull_done":
+		sh.pullMu.Lock()
+		if pa, ok := sh.pulls[m.Auth]; ok {
+			delete(sh.pulls, m.Auth)
+			push := pa.push
+			push.mu.Lock()
+			push.doneFiles++
+			all := push.doneFiles >= push.totalN
+			push.mu.Unlock()
+			if all {
+				delete(sh.pushes, push.id)
+				push.bp.finish()
+			}
+		}
+		sh.pullMu.Unlock()
 		if m.Msg != "" {
 			printErr("[用户 %d] 接收 %s 失败: %s", u.id, m.Name, m.Msg)
 		} else {
@@ -433,6 +473,8 @@ func (sh *serverShell) execTp(fields []string) bool {
 
 // pushToUser 把服务端文件推送给指定用户。为避免服务端主动连接客户端
 // （NAT/防火墙后连不通），改为通知客户端主动发起拉取连接。
+// 每个文件签发一个随机授权令牌，客户端凭令牌拉取，因此绝对路径
+// （保存目录之外的文件）也能推送。
 func (sh *serverShell) pushToUser(u *user, path string) {
 	if u.ver < pullProtoVer {
 		printErr("用户 %d 的 tpfile 版本过旧，请对方更新到最新版后再试", u.id)
@@ -448,51 +490,82 @@ func (sh *serverShell) pushToUser(u *user, path string) {
 		printErr("发送 %s 给用户 %d 失败: %v", path, u.id, err)
 		return
 	}
+	var total int64
 	for _, it := range items {
-		// 逐文件通知客户端拉取；客户端拉完会回报 pull_done
-		sh.sendCtrl(u, ctrlMsg{Type: "pull", Name: filepath.ToSlash(it.rel), Size: it.size})
+		total += it.size
+	}
+	push := &pushJob{
+		id:      randomID(),
+		totalN:  len(items),
+		bp:      newBatchProgress(len(items), total),
+		expires: time.Now().Add(pullAuthTTL),
+	}
+	push.bp.start()
+
+	sh.pullMu.Lock()
+	sh.cleanupPullsLocked()
+	sh.pushes[push.id] = push
+	msgs := make([]ctrlMsg, 0, len(items))
+	for _, it := range items {
+		auth := randomID()
+		sh.pulls[auth] = &pullAuth{abs: it.abs, size: it.size, name: it.rel, push: push, added: time.Now()}
+		msgs = append(msgs, ctrlMsg{Type: "pull", Name: filepath.ToSlash(it.rel), Size: it.size, Auth: auth})
+	}
+	sh.pullMu.Unlock()
+
+	for _, m := range msgs {
+		sh.sendCtrl(u, m)
 	}
 	printOK("已通知用户 %d 拉取 %s (%d 个文件)", u.id, path, len(items))
 }
 
-// servePullChunk 响应客户端的一条拉取分块连接：校验路径后直接写出分块数据。
+// servePullChunk 响应客户端的一条拉取分块连接：凭授权令牌定位文件并写出分块数据，
+// 同时累加发送字节数驱动服务端进度条。
 func (sh *serverShell) servePullChunk(conn net.Conn, h chunkHeader) {
-	if h.Start < 0 || h.Len < 0 || h.Start+h.Len > h.Size {
+	if h.Auth == "" || h.Start < 0 || h.Len < 0 || h.Start+h.Len > h.Size {
 		return
 	}
-	rel, err := sanitizeRelPath(h.Name)
-	if err != nil {
+	sh.pullMu.Lock()
+	pa, ok := sh.pulls[h.Auth]
+	if !ok || time.Now().After(pa.added.Add(pullAuthTTL)) || pa.size != h.Size {
+		sh.pullMu.Unlock()
 		return
 	}
-	full := filepath.Join(sh.dir, filepath.FromSlash(rel))
-	if !withinDir(sh.dir, full) {
+	abs, size, push := pa.abs, pa.size, pa.push
+	sh.pullMu.Unlock()
+
+	fi, err := os.Stat(abs)
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() != size {
 		return
 	}
-	fi, err := os.Stat(full)
-	if err != nil || !fi.Mode().IsRegular() || fi.Size() != h.Size {
-		return
-	}
-	f, err := os.Open(full)
+	f, err := os.Open(abs)
 	if err != nil {
 		return
 	}
 	defer f.Close()
+	push.bp.setName(pa.name)
 	conn.SetWriteDeadline(time.Now().Add(5 * time.Minute))
 	if h.Len > 0 {
-		if _, err := io.Copy(conn, io.NewSectionReader(f, h.Start, h.Len)); err != nil {
+		if _, err := io.Copy(&countingWriter{w: conn, bp: push.bp}, io.NewSectionReader(f, h.Start, h.Len)); err != nil {
 			return
 		}
 	}
 	// 写完即关闭（由调用方 defer conn.Close() 处理），客户端读满即可
 }
 
-// withinDir 判断 path 是否位于 base 目录之内（防目录穿越）。
-func withinDir(base, path string) bool {
-	rel, err := filepath.Rel(base, path)
-	if err != nil {
-		return false
+// cleanupPullsLocked 清理过期或已完成的拉取授权，调用方需持有 pullMu。
+func (sh *serverShell) cleanupPullsLocked() {
+	now := time.Now()
+	for auth, pa := range sh.pulls {
+		if now.Sub(pa.added) > pullAuthTTL {
+			delete(sh.pulls, auth)
+		}
 	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	for id, p := range sh.pushes {
+		if now.Sub(p.expires) > pullAuthTTL {
+			delete(sh.pushes, id)
+		}
+	}
 }
 
 func (sh *serverShell) listUsers() {

@@ -183,23 +183,23 @@ tpfile/
 ```
 054eb35e9bdb917470554f5d96ecab2248ab02138f6113bd331c4497cc360257  install.ps1
 ed2444a443f5d1344e28930848172f6ef57c2a7f4e55bac3bd836e15e06d6ae6  install.sh
-ce11af89dc796057f6c2c6b03119d14d3248321a32a651be5084f857dfba24ff  tpfile-github.zip
-bffc53113fcd90112bb0ef73894a36565ef674c2a0fbef098bf2c1e019c90598  tpfile-linux-amd64
-c3120705919de3fc0f18824ec1d51a23bd239c3d34e974b86339a462d895e52e  tpfile-linux-amd64.tar.gz
-b726037055686575a620c258c8f1fc5eb7ccdc05c829afdcf71de921926b3bd3  tpfile-linux-arm64
-74203153662a8f825f7c9ba4dce7d6236b7ff74e19f72f42c3418221f60c66e4  tpfile-linux-arm64.tar.gz
-fe56bc152ea5856059ab1116b04adc2031a73f844402ebf2ca5acac831eeb318  tpfile-windows-amd64.exe
-8be2a0551142350b0f79be8f7d8566121adc351c019166bcb595e667a6ca35ed  tpfile-windows-amd64.zip
-ea3098ef8488691ca2ea64a2ab71fc10c11878dff00576b7a55859663f960b5a  tpfile-windows-arm64.exe
-baab2e898a76008ede5166e1a476c7413e6c4f35a24fad747c5b361332fca19e  tpfile-windows-arm64.zip
+aa770e2fbda21ecf52de396b2ff415e087b4de0af9a225274a2a6c590f01d7f1  tpfile-github.zip
+1435dd4eddbdcd81846558a403a32d0f252b14b56f0e69def769a2e715eedf48  tpfile-linux-amd64
+374be377bb326936d4acaee2a6be43dbcf04dcf0068f8fb68357bfb60e1a8e21  tpfile-linux-amd64.tar.gz
+e5a94d03d27d57ccc4c0da27a87e34eaf66e01c25c866c4d27f28ab5c67eb1b1  tpfile-linux-arm64
+7a5dae5d2bf823828be35f32a6e591a5cfb423eb41c006aee4b1eefa8fe44a55  tpfile-linux-arm64.tar.gz
+079440948286f6fbea5d8430e1be9dfb03dc18fb6cd883d245ad62f5bef062b4  tpfile-windows-amd64.exe
+15c2182da1c3f4039b201291a095df48a1578ee448f575c08d6a0c8231642dec  tpfile-windows-amd64.zip
+26e8343bede4c3fb8a1982186be486c08b404b091830a0ea4501ad73f4ffffdd  tpfile-windows-arm64.exe
+1178c383cfae5989ff86ce3bc98a74e045191acde4ec805aebacf04f11cac101  tpfile-windows-arm64.zip
 ```
 
 ## 版本
 
-v1.4.2（修复：客户端断开后服务端“能输入但屏幕不显示”）
+v1.4.3（新增：服务端推送进度条 + ↑/↓ 历史命令；修复：推送任意路径文件失败）
 
-- 修复输入显示竞态：主循环清理提示行时不再误清编辑器状态，打字即时可见
-- 中文等全角字符按显示宽度对齐与定位，列表/光标不再错位
-- 传输过程中输入的内容与进度条同屏保留
+- 修复服务端推送绝对路径文件（如 `C:\Users\...\a.zip`）时报“分块 EOF”的问题
+- 服务端 `tp 文件 用户id` 推送时显示发送进度条（百分比 / 速度 / 剩余时间）
+- 客户端与服务端对话框支持 `↑` / `↓` 浏览历史输入命令，`--version` 显示 v1.4.3
 
-历史版本：v1.4.1、v1.4.0、v1.3.1、v1.3.0、v1.2.0、v1.1.0、v1.00
+历史版本：v1.4.2（修复输入显示竞态等）、v1.4.1、v1.4.0、v1.3.1、v1.3.0、v1.2.0、v1.1.0、v1.00

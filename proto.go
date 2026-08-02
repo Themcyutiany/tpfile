@@ -32,7 +32,8 @@ type chunkHeader struct {
 	Chunks int    `json:"chunks"` // 分块总数
 	Start  int64  `json:"start"`  // 本分块在文件中的起始偏移
 	Len    int64  `json:"len"`    // 本分块字节数
-	Dir    string `json:"dir,omitempty"` // "out" 表示服务端 -> 客户端（拉取）
+	Dir    string `json:"dir,omitempty"`  // "out" 表示服务端 -> 客户端（拉取）
+	Auth   string `json:"auth,omitempty"` // 拉取授权令牌（服务端推送时签发）
 }
 
 // ctrlMsg 是控制连接上的会话消息（JSON + 换行）。
@@ -41,6 +42,7 @@ type ctrlMsg struct {
 	Type    string   `json:"type"`
 	V       int      `json:"v,omitempty"`       // 客户端能力版本（hello 时上报）
 	Token   string   `json:"token,omitempty"`   // 会话令牌
+	Auth    string   `json:"auth,omitempty"`    // 拉取授权令牌（pull / pull_done）
 	Name    string   `json:"name,omitempty"`    // 文件/目录路径
 	Size    int64    `json:"size,omitempty"`    // 文件大小
 	Port    int      `json:"port,omitempty"`    // 客户端入站传输端口
