@@ -374,6 +374,30 @@ func TestLsAndPing(t *testing.T) {
 	}
 }
 
+func TestExecTpMeOrder(t *testing.T) {
+	root := t.TempDir()
+	dst := filepath.Join(root, "dst")
+
+	port := freePort(t)
+	sh, cancel := startTestServer(t, port, dst)
+	defer cancel()
+
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	conn, token := connectUser(t, addr, 0, "")
+	defer conn.Close()
+	br := bufio.NewReaderSize(conn, 256*1024)
+
+	u := waitUser(t, sh, token)
+	// 服务端执行: tp -me 用户id 文件  → 客户端应收到 send 且 Name 为文件
+	if !sh.execCmd(fmt.Sprintf("tp -me %d pull.bin", u.id)) {
+		t.Fatal("execCmd 返回 false")
+	}
+	m := readCtrl(t, br)
+	if m.Type != "send" || m.Name != "pull.bin" {
+		t.Fatalf("意外消息: %+v", m)
+	}
+}
+
 func TestKick(t *testing.T) {
 	root := t.TempDir()
 	dst := filepath.Join(root, "dst")

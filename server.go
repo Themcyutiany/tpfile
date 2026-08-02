@@ -298,11 +298,11 @@ func (sh *serverShell) execCmd(line string) bool {
 	}
 	switch fields[0] {
 	case "help":
-		printLine("服务端指令: ls | ls 用户id | ping 用户id | kick 用户id | tp 文件 用户id | tp -me 文件 用户id | stop")
+		printLine("服务端指令: list | ls 用户id | ping 用户id | kick 用户id | tp 文件 用户id | tp -me 用户id 文件 | stop")
 		return true
 	case "stop":
 		return false
-	case "ls":
+	case "list", "ls":
 		if len(fields) == 1 {
 			sh.listUsers()
 			return true
@@ -364,7 +364,7 @@ func (sh *serverShell) execCmd(line string) bool {
 	}
 }
 
-// execTp 处理服务端 tp 指令: tp 文件 用户id / tp -me 文件 用户id。
+// execTp 处理服务端 tp 指令: tp 文件 用户id / tp -me 用户id 文件。
 func (sh *serverShell) execTp(fields []string) bool {
 	me := false
 	rest := fields[1:]
@@ -373,10 +373,16 @@ func (sh *serverShell) execTp(fields []string) bool {
 		rest = rest[1:]
 	}
 	if len(rest) < 2 {
-		printLine("用法: tp 文件 用户id 或 tp -me 文件 用户id")
+		printLine("用法: tp 文件 用户id 或 tp -me 用户id 文件")
 		return true
 	}
-	path, idStr := rest[0], rest[1]
+	var path, idStr string
+	if me {
+		// tp -me 用户id 文件: 先用户id, 后文件
+		idStr, path = rest[0], rest[1]
+	} else {
+		path, idStr = rest[0], rest[1]
+	}
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		printLine("用户id 无效")

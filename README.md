@@ -5,6 +5,24 @@
 都可以在 `>` 提示符下输入指令互相传文件、查看目录、测延迟、踢人。纯 Go 标准库实现，
 零第三方依赖，单个可执行文件即可运行。
 
+## ⚡ 一键安装
+
+**Windows（PowerShell 里粘贴这一行，回车）：**
+
+```powershell
+irm https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.ps1 | iex
+```
+
+**Linux（终端里粘贴这一行，回车，无需 sudo）：**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.sh | bash
+```
+
+> 装完**重新打开终端**，任意目录输入 `tpfile` 即可使用。直连 GitHub 慢时先设置代理：
+> `export HTTPS_PROXY=http://你的代理地址:端口`（Windows 则在 PowerShell 先执行 `$env:HTTPS_PROXY='http://你的代理地址:端口'`）。
+> 也可以直接从仓库 `dist/` 目录或 [GitHub Releases](https://github.com/Themcyutiany/tpfile/releases) 下载编译好的二进制。
+
 ## ✨ 特性
 
 - **交互式会话**：客户端连上服务端后不退出，像聊天一样持续传文件
@@ -49,12 +67,12 @@ tpfile -c 192.168.1.5:1090
 
 | 指令 | 说明 |
 | --- | --- |
-| `ls` | 列出已连接的用户（用户 id） |
+| `list` | 列出已连接的用户（用户 id） |
 | `ls 用户id` | 查看该用户客户端当前目录 |
 | `ping 用户id` | 测试与该用户的延迟 |
 | `kick 用户id` | 踢出该用户（对方会收到提示并退出） |
 | `tp 文件 用户id` | 发送服务端文件到该用户 |
-| `tp -me 文件 用户id` | 从该用户客户端拉取文件到服务端 |
+| `tp -me 用户id 文件` | 从该用户客户端拉取文件到服务端 |
 | `stop` / `Ctrl+C` | 停止服务 |
 
 > 服务端指令里的相对路径基于服务端保存目录（`-d`）；`tp -me` 里的路径是对方
@@ -66,10 +84,10 @@ tpfile -c 192.168.1.5:1090
 # 服务端
 tpfile -s -d ~/incoming
 # 用户 1 连接后：
-ls                      # 查看在线用户
+list                    # 查看在线用户
 ls 1                    # 查看用户 1 客户端的目录
 tp server-file.txt 1    # 把服务端的 server-file.txt 发给用户 1
-tp -me client-file.txt 1  # 把用户 1 客户端的 client-file.txt 拉到服务端
+tp -me 1 client-file.txt  # 把用户 1 客户端的 client-file.txt 拉到服务端
 ping 1                  # 测延迟
 kick 1                  # 踢出用户 1
 
@@ -81,24 +99,6 @@ ls                      # 看服务端目录
 ping                    # 测延迟
 stop                    # 断开
 ```
-
-## 🚀 安装
-
-**Windows 一键安装（推荐）：**
-
-```powershell
-irm https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.ps1 | iex
-```
-
-**Linux 一键安装（推荐，无需 sudo）：**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.sh | bash
-```
-
-> 直连 GitHub 慢时先设置代理再安装：`export HTTPS_PROXY=http://你的代理地址:端口`
-
-也可以直接从仓库 `dist/` 目录或 GitHub Releases 下载编译好的二进制。
 
 ## 🛠️ 参数
 
@@ -172,17 +172,17 @@ tpfile/
 148f514fd8d63ea5773b81c74df07e0df21e7378a9986f8cf1bfe7d71500e25e  install.bat
 fbc83c8077287f35fb186a3a1b5a06812b001e59a798696520598c1a46c8f779  install.ps1
 1a80fe4f8a9520747867038a41d27dcd5f4ae30348bdb3c5a060913f5b56d001  install.sh
-f863c1bf797e01d7329a5edca18a5dd6ae234868e7a55bba1c62728c516f491b  tpfile-github.zip
-abd4fd8e6f82f4d95b344912e384f6d5feed002b916293cfebafba9ab56407f9  tpfile-linux-amd64
-3542eb7410a68fb5f2b31dac7d68169954cf9b032dc9ce12280bac3a26abb7e5  tpfile-linux-amd64.tar.gz
-62a4f754306f619d6ffefaa9017a127b3b2d5cb057848ab837e2b926dcbb93ab  tpfile-linux-arm64
-594b47c1dec3de6821d714f4cac84e684ea43e91e11798039f8f16e98dc0a27d  tpfile-linux-arm64.tar.gz
-7577d8714cb227c19e9a27a92e20fd7fed05fa159272ba41512bb3f1bd4b6695  tpfile-windows-amd64.exe
-230c3bcca5a5cc812ae4b08dffa0f479301b0e98127ffd0dc7f503c03b3e6b80  tpfile-windows-amd64.zip
-7eb76cdfcc76f94c3eceb81b5572b2cb130809b90fa41d625380bb1b8a6e8564  tpfile-windows-arm64.exe
-3180e93f96464cbbdf9e3ccb563fbe6800f3acb3688bc1bab621ba3f0613f472  tpfile-windows-arm64.zip
+4d59d6ea8259df14a7f7bdfc0a242cba22f98f959b550fcba7a9321a1df78311  tpfile-github.zip
+226f54d6f041de1a8fcec5651813aa694c5b13683cd06e3b97118a2fa6417cbd  tpfile-linux-amd64
+a6cd766bab344f0ed20315403a450fe8517c3c96cf62519b77284785922118c1  tpfile-linux-amd64.tar.gz
+a5326aa7ffc407524aee64ea5de481beba0df85c2dcf69337f4b2f6ce269ad8e  tpfile-linux-arm64
+66e5ed5b2e6269a83c37bd71572a5e7ac615dae69b7cbe23166237cf404bab28  tpfile-linux-arm64.tar.gz
+0933818dcae7fcd6526aa38ce6ff2b87a4610e683e3d60ad7a0836d707def640  tpfile-windows-amd64.exe
+3e57af1c04fe2c5bd70b42448ed2984386038f74c6c8633e59caae66b2a25156  tpfile-windows-amd64.zip
+2a9dc0e87942db6d1c3ffa7b98e3b72a9541914fbec6f0ea25cd4aa79c91a4cf  tpfile-windows-arm64.exe
+75529ba7dd858fe3e1188783d9c6cb8f255cbba24077895d269c9c6b639e4891  tpfile-windows-arm64.zip
 ```
 
 ## 版本
 
-v1.3.0
+v1.3.1
