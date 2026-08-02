@@ -19,8 +19,10 @@ irm https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.ps1 | iex
 curl -fsSL https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.sh | bash
 ```
 
-> 装完**重新打开终端**，任意目录输入 `tpfile` 即可使用。直连 GitHub 慢时先设置代理：
-> `export HTTPS_PROXY=http://你的代理地址:端口`（Windows 则在 PowerShell 先执行 `$env:HTTPS_PROXY='http://你的代理地址:端口'`）。
+> 装完**重新打开终端**，任意目录输入 `tpfile` 即可使用。安装脚本会自动获取最新版本并
+> **校验下载包的 SHA-256**（与发布页 `sha256sums.txt` 对照），校验失败会自动报错。
+> 直连 GitHub 慢时先设置代理：`export HTTPS_PROXY=http://你的代理地址:端口`（Windows 则在
+> PowerShell 先执行 `$env:HTTPS_PROXY='http://你的代理地址:端口'`）。
 > 也可以直接从仓库 `dist/` 目录或 [GitHub Releases](https://github.com/Themcyutiany/tpfile/releases) 下载编译好的二进制。
 
 ## ✨ 特性
@@ -175,10 +177,9 @@ tpfile/
 以下是所有发布文件的 SHA-256 校验值（与 `sha256sums.txt` 内容一致，可用于校验下载完整性）：
 
 ```
-148f514fd8d63ea5773b81c74df07e0df21e7378a9986f8cf1bfe7d71500e25e  install.bat
-fbc83c8077287f35fb186a3a1b5a06812b001e59a798696520598c1a46c8f779  install.ps1
-1a80fe4f8a9520747867038a41d27dcd5f4ae30348bdb3c5a060913f5b56d001  install.sh
-823297846abdf1ad56e57cdc6c2add04605e960f0ac7ba346affd0ac8133af2f  tpfile-github.zip
+4a5b5439578f2051935d14191dc4ee18903e2ea4a0d891a07464517cca2d6b3f  install.ps1
+1fbeb98df328f324ba2ad53236bd1f726abcd1f888bf0b9ac6af00cfa630c097  install.sh
+89d82f07c29e5d8625f883208b63a62637863172c05eae3b9619ccba484c1ed4  tpfile-github.zip
 d3b184c29f675f4708d614d75aaacf4f9bf24879a8aa0eead6b384c5ac1a0631  tpfile-linux-amd64
 a3d15cb6e2cdcbe672c53d664a12d7cb5040385bf10725d17ce60a5aba3e0a2b  tpfile-linux-amd64.tar.gz
 3970c80f04d596fd13017c9b61d2b4a7e0d6be9406838220c993113c79c23a9e  tpfile-linux-arm64

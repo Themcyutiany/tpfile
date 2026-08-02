@@ -22,7 +22,7 @@ fi
 if [ -z "$TAG" ] && command -v wget >/dev/null 2>&1; then
   TAG="$(wget -qO- --timeout=10 "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1 || true)"
 fi
-if [ -z "$TAG" ]; then TAG="1.00"; fi
+if [ -z "$TAG" ]; then TAG="1.4.0"; fi
 
 # 2. 根据 CPU 架构选择安装包
 case "$(uname -m)" in
@@ -53,6 +53,26 @@ else
   wget --show-progress --timeout=30 -O "$TMP/$ASSET" "$URL"
 fi
 echo ""
+# 3.1 校验下载完整性（对照发布页的 sha256sums.txt）
+if command -v sha256sum >/dev/null 2>&1; then
+  SUMFILE="$TMP/sha256sums.txt"
+  if { command -v curl >/dev/null 2>&1 && curl -fsSL --connect-timeout 10 "https://github.com/$REPO/releases/download/$TAG/sha256sums.txt" -o "$SUMFILE" 2>/dev/null; } || { command -v wget >/dev/null 2>&1 && wget -qO- --timeout=10 "https://github.com/$REPO/releases/download/$TAG/sha256sums.txt" 2>/dev/null > "$SUMFILE"; }; then
+    WANT="$(awk -v a="$ASSET" '$2 == a {print $1; exit}' "$SUMFILE")"
+    if [ -n "$WANT" ]; then
+      GOT="$(sha256sum "$TMP/$ASSET" | awk '{print $1}')"
+      if [ "$GOT" != "$WANT" ]; then
+        echo "错误：$ASSET 的 SHA-256 与发布页不一致，请重新运行安装。" >&2
+        exit 1
+      fi
+      echo "校验通过：$ASSET 与发布页 SHA-256 一致"
+    else
+      echo "警告：发布页未列出 $ASSET 的校验值，跳过校验。"
+    fi
+  else
+    echo "警告：无法获取校验文件，跳过校验。"
+  fi
+fi
+
 tar -xzf "$TMP/$ASSET" -C "$TMP"
 
 # 4. 决定安装目录并安装

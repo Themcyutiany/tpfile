@@ -1,7 +1,7 @@
 # tpfile 一键安装脚本（Windows）
 # 用法：irm https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.ps1 | iex
 # 说明：不需要管理员权限；自动获取最新版本，按 CPU 架构下载对应的安装包，
-#       安装到 %LOCALAPPDATA%\tpfile，并把该目录加入用户 PATH。
+#       校验 SHA-256 后安装到 %LOCALAPPDATA%\tpfile，并把该目录加入用户 PATH。
 
 $ErrorActionPreference = 'Stop'
 
@@ -19,7 +19,7 @@ try {
   $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ 'User-Agent' = 'tpfile-installer' } -TimeoutSec 15
   $Tag = [string]$rel.tag_name
 } catch {}
-if (-not $Tag) { $Tag = '1.00' }
+if (-not $Tag) { $Tag = '1.4.0' }
 
 # 2. 根据 CPU 架构选择安装包
 $arch = $env:PROCESSOR_ARCHITECTURE
@@ -33,7 +33,30 @@ $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('tpfile-install-' + [guid]::
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 $zipPath = Join-Path $tmp $asset
 Write-Host "正在下载 $asset（版本 $Tag）..."
-Invoke-WebRequest -Uri $url -OutFile $zipPath
+Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+# 3.1 校验下载完整性（对照发布页的 sha256sums.txt）
+$sumPath = Join-Path $tmp 'sha256sums.txt'
+try {
+  Invoke-WebRequest -Uri "https://github.com/$Repo/releases/download/$Tag/sha256sums.txt" -OutFile $sumPath -UseBasicParsing -TimeoutSec 20
+  $want = $null
+  foreach ($line in (Get-Content -LiteralPath $sumPath -ErrorAction Stop)) {
+    if ($line -match "^\s*([0-9a-fA-F]{64})\s+$([regex]::Escape($asset))\s*$") {
+      $want = $Matches[1].ToLower()
+      break
+    }
+  }
+  if ($want) {
+    $got = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLower()
+    if ($got -ne $want) { throw "校验失败：$asset 的 SHA-256 与发布页不一致，请重新运行安装。" }
+    Write-Host "校验通过：$asset 与发布页 SHA-256 一致"
+  } else {
+    Write-Host "警告：发布页未列出 $asset 的校验值，跳过校验。"
+  }
+} catch {
+  if ($_.Exception.Message -like '*校验失败*') { throw }
+  Write-Host "警告：无法获取校验文件，跳过校验（$($_.Exception.Message)）"
+}
+
 Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
 $exe = Get-ChildItem -Path $tmp -Filter 'tpfile-windows-*.exe' -Recurse | Select-Object -First 1
 if (-not $exe) { throw '下载的压缩包中没有找到 tpfile 程序文件。' }
