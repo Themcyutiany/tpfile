@@ -1,5 +1,7 @@
 # 构建产物
 /tpfile
+/tpfile.exe
+*.exe
 /dist/
 
 # 测试 / 临时文件

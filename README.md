@@ -1,64 +1,24 @@
-# tpfile — 多线程文件传输工具
+# tpfile — 局域网交互式文件传输工具
 
-`tpfile` 是一个轻量级、跨平台（Windows / Linux）的 TCP 文件传输工具：
-服务端监听端口接收文件，客户端连接后把文件（或整个目录）拆成多个分块、通过
-多个并行 TCP 连接传输，两端实时显示进度条与速度。纯 Go 标准库实现，零第三方依赖，
-单个可执行文件即可运行。
+`tpfile` 是一个轻量级、跨平台（Windows / Linux）的**交互式**文件传输工具：
+服务端启动后等待客户端连接，每个连接就是一个「用户」；连接建立后，客户端和服务端
+都可以在 `>` 提示符下输入指令互相传文件、查看目录、测延迟、踢人。纯 Go 标准库实现，
+零第三方依赖，单个可执行文件即可运行。
 
-## ⚡ Windows 一键安装（推荐）
+## ✨ 特性
 
-在 **PowerShell** 窗口中复制粘贴下面这一行命令，按回车即可自动安装最新版：
+- **交互式会话**：客户端连上服务端后不退出，像聊天一样持续传文件
+- **双向传输**：客户端可上传，也可下载服务端文件；服务端同样可以推/拉用户文件
+- **用户管理**：服务端可查看在线用户、查看用户目录、踢出用户
+- **多线程并行**：每个文件 `-t` 个并行连接，多个文件 `-j` 个同时传输
+- **单行进度**：进度条/速度/剩余时间/当前文件合并成一行实时刷新，传输中照样可以输入指令
+- **目录传输**：发送文件夹会保留顶层文件夹名（如 `.minecraft`），隐藏目录用 `ls -a` 查看
+- **目录日志合并**：接收文件夹时，逐文件日志合并为一行的开始/完成汇总，不再刷屏
+- **IPv6 原生支持**：服务端默认双栈监听（IPv4 + IPv6）
+- **SOCKS5 代理**：客户端可走 `--proxy` 代理出站
+- **安全细节**：文件名清洗防目录穿越；同名文件自动追加 `(1)`、`(2)` 后缀
 
-```powershell
-irm https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.ps1 | iex
-```
-
-- 无需管理员权限，自动下载当前 CPU 架构（amd64 / arm64）的最新版本
-- 安装到 `%LOCALAPPDATA%\tpfile`，自动加入用户 PATH
-- 装完**重新打开终端**，任意目录输入 `tpfile` 即可使用
-
-> Windows 用户看到这里就够了；Linux 安装见下一节，手动安装见下文对应章节。
-
-## 🐧 Linux 一键安装（推荐）
-
-在终端中复制粘贴下面这一行命令，回车即可自动安装最新版（**无需 sudo**）：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.sh | bash
-```
-
-没有 curl 的话用 wget 也可以：
-
-```bash
-wget -qO- https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.sh | bash
-```
-
-**如果直连 GitHub 很慢或失败**，先设置代理再运行上面的命令（脚本会自动检测并提示）：
-
-```bash
-export HTTPS_PROXY=http://你的代理地址:端口   # 例如：http://192.168.1.7:7897
-wget -qO- https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.sh | bash
-```
-
-
-- 自动下载当前 CPU 架构（amd64 / arm64）的最新版本
-- 普通用户装到 `~/.local/bin` 并自动加入 PATH（无需 sudo）；root 用户装到 `/usr/local/bin`
-- 装完重开终端（或 `source ~/.bashrc`），任意目录输入 `tpfile` 即可
-
-## 特性
-
-- **多线程并行传输**：默认 4 条并行连接（`-t` 可调），大文件显著提速
-- **双端进度条**：客户端显示发送进度，服务端实时显示接收进度（百分比 / 速度 / 剩余时间）
-- **断线重试**：单个分块失败自动重试（`-r` 可调），传输结果以服务端落盘确认（ACK）为准
-- **IPv6 原生支持**：服务端默认双栈监听（IPv4 + IPv6），客户端支持 `[::1]:1090`、`::1:1090` 等写法
-- **SOCKS5 代理**：`--proxy 127.0.0.1:7897` 可走代理出站，直连不通时非常有用
-- **目录传输**：`-f` 传目录会递归发送，并保留顶层文件夹名（如 `-f .minecraft`，接收端会生成 `.minecraft/...`）；以 `.` 开头的隐藏目录可用 `ls -a` 查看
-- **目录日志合并**：服务端接收目录时，逐文件的"开始/完成"日志合并为一行的开始/完成汇总，不再刷屏
-- **多文件**：`-f` 可重复使用，一次连接发送多个文件
-- **安全细节**：文件名清洗防目录穿越；同名文件自动追加 `(1)`、`(2)` 等后缀
-- **IPv4/IPv6 双栈监听**，端口默认 **1090**
-
-## 快速开始
+## ⚡ 快速开始
 
 ```bash
 # 服务端（接收）：监听 1090 端口，文件保存到当前目录
@@ -67,167 +27,142 @@ tpfile -s
 # 服务端：指定端口与保存目录
 tpfile -s -p 9000 -d /data/incoming
 
-# 客户端（发送）：连接并发送单个文件（-c 不带端口时默认 1090）
-tpfile -c 192.168.1.5 -f movie.mp4
-
-# 客户端：8 线程 + 4 个文件并行发送整个目录
-tpfile -c 192.168.1.5:1090 -f ./photos -t 8 -j 4
-
-# 客户端：走 SOCKS5 代理
-tpfile -c 192.168.1.5:1090 -f ./photos -t 8 --proxy 127.0.0.1:7897
+# 客户端：连接服务端，进入交互会话
+tpfile -c 192.168.1.5:1090
 ```
 
-## Linux 安装（任意目录可用，无需 sudo）
+连接成功后两端都会出现 `>` 提示符，直接输入指令即可。
 
-tpfile 运行时**不需要 sudo**（监听端口、收发文件都不需要管理员权限）。推荐用下面的
-用户级安装，全程不需要 sudo：
+## ⌨️ 交互指令
+
+### 客户端指令
+
+| 指令 | 说明 |
+| --- | --- |
+| `tp 文件或文件夹` | 发送本地文件/目录到服务端（保留顶层文件夹名） |
+| `tp -me 服务端文件` | 从服务端下载文件到本地 |
+| `ls` | 查看服务端当前目录 |
+| `ping` | 测试与服务端的延迟 |
+| `stop` / `Ctrl+C` | 断开连接 |
+
+### 服务端指令
+
+| 指令 | 说明 |
+| --- | --- |
+| `ls` | 列出已连接的用户（用户 id） |
+| `ls 用户id` | 查看该用户客户端当前目录 |
+| `ping 用户id` | 测试与该用户的延迟 |
+| `kick 用户id` | 踢出该用户（对方会收到提示并退出） |
+| `tp 文件 用户id` | 发送服务端文件到该用户 |
+| `tp -me 文件 用户id` | 从该用户客户端拉取文件到服务端 |
+| `stop` / `Ctrl+C` | 停止服务 |
+
+> 服务端指令里的相对路径基于服务端保存目录（`-d`）；`tp -me` 里的路径是对方
+> 客户端当前目录里的文件。传输进行中两端都可以继续输入其它指令。
+
+## 🌰 使用示例
 
 ```bash
-# 方式一：安装脚本（适用于已下载的 tar.gz 安装包）
-bash install.sh ./tpfile-linux-amd64
-# 脚本会自动装到 ~/.local/bin，并把该目录加入 PATH（写入 ~/.bashrc 等）
-# 按提示执行下面命令让 PATH 立即生效（或重新打开终端）：
-source ~/.bashrc
+# 服务端
+tpfile -s -d ~/incoming
+# 用户 1 连接后：
+ls                      # 查看在线用户
+ls 1                    # 查看用户 1 客户端的目录
+tp server-file.txt 1    # 把服务端的 server-file.txt 发给用户 1
+tp -me client-file.txt 1  # 把用户 1 客户端的 client-file.txt 拉到服务端
+ping 1                  # 测延迟
+kick 1                  # 踢出用户 1
 
-# 方式二：手动安装（同样无需 sudo）
-mkdir -p ~/.local/bin
-install -m 755 tpfile-linux-amd64 ~/.local/bin/tpfile
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-
-# 方式三：系统级安装（所有用户可用，只有这一步需要 sudo）
-sudo bash scripts/install.sh --system ./tpfile-linux-amd64
-
-# 安装后验证（任意目录均可执行，运行本身不需要 sudo）
-tpfile --version
+# 客户端
+tpfile -c 192.168.1.5:1090
+tp ./photos             # 上传整个目录（保留 photos/ 顶层文件夹名）
+tp -me server-file.txt  # 下载服务端文件
+ls                      # 看服务端目录
+ping                    # 测延迟
+stop                    # 断开
 ```
 
-> 脚本参数：`--user` 强制用户级安装（无需 sudo）；`--system` 强制装到
-> `/usr/local/bin`（需要 root）。不带参数时自动选择：普通用户走用户级，root 走系统级。
+## 🚀 安装
 
-## Windows 安装（任意目录可用，无需管理员权限）
-
-**一键安装（推荐，自动下载最新版）：**
+**Windows 一键安装（推荐）：**
 
 ```powershell
 irm https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.ps1 | iex
 ```
 
-脚本会自动完成下面这些事：下载对应 CPU 架构的最新版本 → 安装到
-`%LOCALAPPDATA%\tpfile\tpfile.exe` → 加入用户 PATH。完成后重新打开一个终端，
-任意目录输入 `tpfile` 即可。
+**Linux 一键安装（推荐，无需 sudo）：**
 
-也可以下载安装包手动安装：
-
-在 Windows 上想让任意目录都能直接输入 `tpfile`，运行安装脚本即可（无需管理员权限，
-脚本会把程序装到用户目录并自动加入用户 PATH）：
-
-```powershell
-# 在 tpfile-windows-amd64.exe 所在目录打开 PowerShell，然后运行：
-powershell -ExecutionPolicy Bypass -File install.ps1
-# 或者直接双击 install.bat
-
-# 安装完成后，重新打开一个终端（或新开窗口），任意目录输入：
-tpfile --version
-tpfile -s
+```bash
+curl -fsSL https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.sh | bash
 ```
 
-> 说明：脚本把 `tpfile-windows-amd64.exe` 复制为
-> `%LOCALAPPDATA%\tpfile\tpfile.exe`，并把该目录加入用户 PATH（只加一次，
-> 保留原有 PATH 格式）。卸载时删除这两个东西即可：`%LOCALAPPDATA%\tpfile`
-> 目录和用户 PATH 里对应的条目。
+> 直连 GitHub 慢时先设置代理再安装：`export HTTPS_PROXY=http://你的代理地址:端口`
 
+也可以直接从仓库 `dist/` 目录或 GitHub Releases 下载编译好的二进制。
 
-## 参数说明
+## 🛠️ 参数
 
 | 参数 | 说明 |
 | --- | --- |
-| `-s, --serve` | 服务端模式：监听并接收文件 |
-| `-c, --connect 地址` | 客户端模式：目标地址，如 `192.168.1.5:1090`、`[::1]:1090`；**不带端口时默认 1090**，可用 `-p` 覆盖 |
+| `-s, --serve` | 服务端模式 |
+| `-c, --connect 地址` | 连接模式，如 `192.168.1.5:1090`、`[::1]:1090`；不带端口时默认 1090 |
 | `-p, --port 端口` | 端口，默认 `1090` |
 | `-d, --dir 目录` | 服务端保存目录，默认当前目录 |
-| `-f, --file 路径` | 要发送的文件或目录，可重复；目录会递归发送 |
 | `-t, --threads N` | 每个文件的并行连接数，默认 `4` |
+| `-j, --jobs N` | 同时并行传输的文件数，默认 `4` |
 | `-r, --retries N` | 分块失败重试次数，默认 `3` |
-| `--proxy 地址` | 出站走 SOCKS5 代理，如 `127.0.0.1:7897` |
+| `--proxy 地址` | 客户端出站走 SOCKS5 代理，如 `127.0.0.1:7897` |
 | `-v, --verbose` | 显示详细日志 |
 | `--version` | 显示版本 |
 | `-h, --help` | 显示帮助 |
 
-## 使用示例
+## 🔧 工作原理
 
-```bash
-# 局域网传输（Linux 接收，Windows 发送）
-# 接收端（Linux）
-./tpfile-linux-amd64 -s -d ~/incoming
-# 发送端（Windows）
-tpfile-windows-amd64.exe -c 192.168.1.100 -f D:\movies\big.mp4 -t 8
+1. 客户端连接服务端后发送 `hello` 建立会话（服务端分配用户 id），并开放一个入站
+   端口用于接收服务端的文件推送。
+2. 传文件时，发送方把文件按 `-t` 切成若干分块，通过多条并行 TCP 连接发送；首部
+   携带会话令牌，接收方校验令牌后按偏移落盘（`WriteAt`），分块可乱序到达。
+3. 每个分块落盘后接收方回复 `ok` 确认，重试完全幂等；`-j` 让多个文件同时传输。
+4. 控制连接上跑 `ls / ping / kick / send` 等指令，与文件传输互不阻塞，因此
+   进度条显示时依然可以输入指令。
 
-# IPv6 传输
-tpfile -s
-tpfile -c [::1]:1090 -f a.bin
-tpfile -c ::1:1090 -f a.bin          # 也支持无方括号写法
-
-# 直连不通时走代理（127.0.0.1:7897 常见于 Clash 等）
-tpfile -c 服务器地址:1090 -f a.bin --proxy 127.0.0.1:7897
-
-# 一次发送多个文件 + 整个目录
-tpfile -c 192.168.1.5:1090 -f a.txt -f b.zip -f ./docs
-
-# 服务端端口与保存目录
-tpfile -s -p 9000 -d D:\incoming
-```
-
-## 工作原理
-
-1. 客户端把文件按线程数切块（小于 256 KiB 的块自动合并，小文件用较少连接）。
-2. 每个分块用一条独立 TCP 连接发送：首部为 JSON（传输 ID、文件名、偏移、长度），
-   随后是分块数据。
-3. 服务端用同一文件句柄按偏移并发写入（`WriteAt`），分块可乱序到达，
-   同时按实际写入字节实时统计接收进度。
-4. 服务端落盘成功后回复 `ok` 确认；客户端收到全部确认才算传输完成，因此
-   进度与"完成"信息是真实的服务端落盘结果，重试也完全幂等。
-5. 服务端监听 `[::]` 双栈地址，Windows / Linux 均可同时接受 IPv4 与 IPv6 连接。
-
-## 从源码构建与测试
+## 🧪 从源码构建与测试
 
 需要 Go 1.26+（纯标准库，无第三方依赖）：
 
 ```bash
 go build .                  # 构建当前平台
-go test ./...               # 运行全部测试
+go test ./... -count=1      # 运行全部测试
 go vet ./...                # 静态检查
 
 # 或使用 Makefile
-make build                  # 当前平台
+make build
 make test
 make release                # 交叉编译 Linux + Windows 共 4 个二进制到 dist/
-make install                # Linux 安装（普通用户无需 sudo）
-make install-user            # 强制用户级安装（无需 sudo）
 ```
 
-## 文件结构
+## 📂 文件结构
 
 ```
 tpfile/
 ├── main.go               # 命令行入口与参数解析
-├── client.go             # 客户端：切块、并行发送、重试
-├── server.go             # 服务端：接收、并发落盘、进度渲染
-├── proto.go              # 分块协议（头部 + ACK）
+├── client.go             # 客户端：交互会话、入站接收、指令处理
+├── server.go             # 服务端：用户管理、指令处理、推送/拉取
+├── transfer.go           # 传输引擎：分块发送/接收、进度、重试（两端共用）
+├── proto.go              # 协议：控制消息 + 分块首部
+├── ui.go                 # 终端 UI：提示符、单行进度、日志协作
+├── progress.go           # 发送端整体进度条
+├── util.go               # 路径清洗、切块计划、地址解析等
 ├── proxy.go              # SOCKS5 代理客户端
-├── progress.go           # 进度条渲染
-├── util.go               # 地址解析、路径清洗、切块计划等
 ├── *_test.go             # 单元测试与端到端集成测试
 ├── Makefile
-├── install.ps1           # Windows 一键安装脚本（irm ... | iex）
-├── install.sh            # Linux 一键安装脚本（curl ... | bash）
-├── scripts/install.sh    # Linux 安装脚本（用户级免 sudo / 系统级）
-├── scripts/install.ps1   # Windows 安装脚本（免管理员，自动加入 PATH）
-├── scripts/install.bat   # Windows 安装脚本的便捷入口（可双击）
-└── .github/workflows/    # CI：测试 + 交叉编译 + Release
+├── install.ps1           # Windows 一键安装脚本
+├── install.sh            # Linux 一键安装脚本
+├── scripts/              # 安装脚本（打包进安装包）
+└── dist/                 # 编译好的各平台二进制与安装包
 ```
 
-## 校验文件哈希值
+## 🔐 校验文件哈希值
 
 仓库 `dist/` 目录也直接存放了编译好的各平台二进制与安装包（与 Release 内容一致），可直接下载。
 
@@ -237,17 +172,17 @@ tpfile/
 148f514fd8d63ea5773b81c74df07e0df21e7378a9986f8cf1bfe7d71500e25e  install.bat
 fbc83c8077287f35fb186a3a1b5a06812b001e59a798696520598c1a46c8f779  install.ps1
 1a80fe4f8a9520747867038a41d27dcd5f4ae30348bdb3c5a060913f5b56d001  install.sh
-564880acf28b52e9bc83efc7ed885a1d3e60a23fdf2151aedae60ae769ce8427  tpfile-github.zip
-be8b22feecc2159880511274e5c4bc84e4be040a3c146884c82369f9ccb3d9ce  tpfile-linux-amd64
-f486464b866f831fbdc243948485e1389df06ab12045581893703e7d10ed769b  tpfile-linux-amd64.tar.gz
-a6fc49abf9496166fdeed932d5e42af72918f2d9e79573d46f9f0cb15dc832d2  tpfile-linux-arm64
-6274bf657bfefd87ef584586cdb44bd9a6723c14e30a249ad683e0ec26224279  tpfile-linux-arm64.tar.gz
-0daf1817dc053cd39f866874f92e7b33d4fdfd53ef8c1cabc7901acec0fb2312  tpfile-windows-amd64.exe
-d54673d9ceb15decb733b006537a19212d75708d50e51630389305b603f80dc9  tpfile-windows-amd64.zip
-27a8bc68e3c142ff47bfea86ee102b2f9834154273066cee671969a46a7ea607  tpfile-windows-arm64.exe
-20bca029a942d324b0fb6cd4fa61bd10724ef604f48dc9553d6f02e0e628e16d  tpfile-windows-arm64.zip
+f863c1bf797e01d7329a5edca18a5dd6ae234868e7a55bba1c62728c516f491b  tpfile-github.zip
+abd4fd8e6f82f4d95b344912e384f6d5feed002b916293cfebafba9ab56407f9  tpfile-linux-amd64
+3542eb7410a68fb5f2b31dac7d68169954cf9b032dc9ce12280bac3a26abb7e5  tpfile-linux-amd64.tar.gz
+62a4f754306f619d6ffefaa9017a127b3b2d5cb057848ab837e2b926dcbb93ab  tpfile-linux-arm64
+594b47c1dec3de6821d714f4cac84e684ea43e91e11798039f8f16e98dc0a27d  tpfile-linux-arm64.tar.gz
+7577d8714cb227c19e9a27a92e20fd7fed05fa159272ba41512bb3f1bd4b6695  tpfile-windows-amd64.exe
+230c3bcca5a5cc812ae4b08dffa0f479301b0e98127ffd0dc7f503c03b3e6b80  tpfile-windows-amd64.zip
+7eb76cdfcc76f94c3eceb81b5572b2cb130809b90fa41d625380bb1b8a6e8564  tpfile-windows-arm64.exe
+3180e93f96464cbbdf9e3ccb563fbe6800f3acb3688bc1bab621ba3f0613f472  tpfile-windows-arm64.zip
 ```
 
 ## 版本
 
-v1.1.0
+v1.3.0

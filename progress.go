@@ -17,7 +17,7 @@ func isTerminal(f *os.File) bool {
 	return fi.Mode()&os.ModeCharDevice != 0
 }
 
-// batchProgress 负责客户端整体进度渲染：多个文件并行发送时，所有进度合并到一行实时刷新。
+// batchProgress 负责发送端整体进度渲染：多个文件并行发送时，所有进度合并到一行实时刷新。
 // 终端下用 \r 在同一行内刷新；非终端（重定向/日志）只在结束时输出一行汇总。
 type batchProgress struct {
 	total   int64
@@ -54,7 +54,7 @@ func (p *batchProgress) setName(name string) { p.curName.Store(name) }
 
 func (p *batchProgress) start() { go p.loop() }
 
-// finish 停止渲染：终端下输出最终一行，非终端只输出一行汇总。
+// finish 停止渲染并输出最终一行。
 func (p *batchProgress) finish() {
 	close(p.stop)
 	<-p.doneC
@@ -117,19 +117,7 @@ func (p *batchProgress) render(final bool) {
 	line := fmt.Sprintf("[%d/%d] %5.1f%% %s %9s/s 剩余 %s (%s/%s) %s",
 		cur, p.totalN, pct, bar(pct, 20), humanRate(rate), eta, humanSize(done), humanSize(p.total), truncate(name, 28))
 
-	outMu.Lock()
-	defer outMu.Unlock()
-	if p.tty {
-		fmt.Fprintf(os.Stdout, "\r%-110s", line)
-		if final {
-			progressLive = false
-			fmt.Fprintln(os.Stdout)
-		} else {
-			progressLive = true
-		}
-	} else if final {
-		fmt.Fprintln(os.Stdout, line)
-	}
+	renderProgress(line, final)
 }
 
 func truncate(s string, n int) string {

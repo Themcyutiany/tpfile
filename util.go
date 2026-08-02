@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,25 @@ import (
 
 // parseTarget 解析 "主机:端口"，兼容 IPv6（[::1]:1090 / ::1 / ::1:1090）。
 // 地址中未带端口时使用 defPort。
+// listDir 返回目录条目列表（目录名带 / 后缀，已排序）。
+func listDir(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return []string{"<读取失败: " + err.Error() + ">"}
+	}
+	var out []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() {
+			name += "/"
+		}
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// parseTarget 解析 "主机:端口"，兼容 IPv6（[::1]:1090 / ::1 / ::1:1090）。
 func parseTarget(addr string, defPort int) (string, error) {
 	if defPort < 1 || defPort > 65535 {
 		return "", fmt.Errorf("端口无效: %d", defPort)

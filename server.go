@@ -3,11 +3,12 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,68 +16,42 @@ import (
 	"time"
 )
 
-type transfer struct {
-	id       string
-	path     string
-	name     string
-	size     int64
-	f        *os.File
-	total    int
-	done     atomic.Int32
-	last     atomic.Int64 // 最近活跃时间 (UnixNano)
-	received atomic.Int64 // 已写入的字节数（重试会重复计数，展示时封顶）
-
-	mu   sync.Mutex
-	seen map[int]bool // 已接收的分块下标，保证重试幂等
+// user 是一个已连接的客户端会话。
+type user struct {
+	id     int
+	token  string
+	conn   net.Conn
+	wmu    sync.Mutex // 保护 conn 写入
+	ip     string
+	inPort int // 客户端入站传输端口（0 表示不支持接收推送）
 }
 
-type server struct {
-	dir       string
-	regMu     sync.Mutex
-	reg       map[string]*transfer // 进行中的传输
-	compMu    sync.Mutex
-	completed map[string]time.Time // 已完成传输的 ID（用于重试幂等）
-	grpMu     sync.Mutex
-	groups    map[string]*groupStat // 顶层目录/单文件的汇总统计
+// serverShell 服务端状态：监听、用户管理、接收引擎。
+type serverShell struct {
+	ctx     context.Context
+	dir     string
+	threads int
+	retries int
+	jobs    int
+	verbose bool
+	ln      net.Listener
+	rcv     *receiver
+	stopped atomic.Bool
+	usersMu sync.Mutex
+	users   map[int]*user
+	nextID  int
+	stopOne sync.Once
 }
 
-// groupStat 统计一个顶层分组（单个文件或一个目录）的接收进度。
-type groupStat struct {
-	group    string    // 顶层名称: 目录的第一段, 或单个文件名
-	dirLike  bool      // 是否为目录内文件
-	files    int       // 已完成的文件数
-	bytes    int64     // 已完成字节数
-	active   int       // 正在接收的文件数（并行/多客户端时防止提前结算）
-	lastSeen time.Time // 最近一次有文件到达的时间
-	reported bool      // 是否已输出汇总
-}
-
-// groupOf 返回顶层分组名: 目录内文件取路径第一段, 单文件用整个文件名。
-func groupOf(rel string) string {
-	if i := strings.IndexByte(rel, '/'); i > 0 {
-		return rel[:i]
-	}
-	return rel
-}
-
-func newServer(dir string) *server {
-	return &server{dir: dir, reg: make(map[string]*transfer), completed: make(map[string]time.Time), groups: make(map[string]*groupStat)}
-}
-
-func (s *server) logf(format string, args ...any) {
-	printLine("[服务端] "+format, args...)
-}
-
-// runServer 监听并接收文件，直到 ctx 被取消。
-func runServer(ctx context.Context, port int, dir string, verbose bool) error {
+// startServerShell 创建服务端并开始监听（不含交互指令循环）。
+func startServerShell(ctx context.Context, port int, dir string, threads, retries, jobs int, verbose bool) (*serverShell, error) {
 	absDir, err := filepath.Abs(dir)
 	if err == nil {
 		dir = absDir
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("创建保存目录失败: %w", err)
+		return nil, fmt.Errorf("创建保存目录失败: %w", err)
 	}
-
 	addr := net.JoinHostPort("::", strconv.Itoa(port))
 	ln, err := net.Listen("tcp", addr)
 	mode := "IPv4+IPv6"
@@ -85,404 +60,410 @@ func runServer(ctx context.Context, port int, dir string, verbose bool) error {
 		ln, err = net.Listen("tcp", ":"+strconv.Itoa(port))
 		mode = "IPv4"
 		if err != nil {
-			return fmt.Errorf("监听端口 %d 失败: %w", port, err)
+			return nil, fmt.Errorf("监听端口 %d 失败: %w", port, err)
 		}
 	}
+	sh := &serverShell{
+		ctx:     ctx,
+		dir:     dir,
+		threads: threads,
+		retries: retries,
+		jobs:    jobs,
+		verbose: verbose,
+		ln:      ln,
+		users:   make(map[int]*user),
+		nextID:  1,
+	}
+	sh.rcv = newReceiver(dir, "服务端", verbose)
+	go sh.rcv.progressLoop(ctx)
+	go sh.rcv.watchdog(ctx)
+	go sh.rcv.settleGroups(ctx)
+	go sh.acceptLoop(ctx)
+	printLine("tpfile 服务端已启动，监听 %s (%s)", ln.Addr(), mode)
+	printLine("接收的文件将保存到: %s", dir)
+	printLine("提示: 以 . 开头的目录(如 .minecraft)在 Linux 下默认隐藏, 用 ls -a 查看")
+	printLine("输入 help 查看服务端指令；stop 或 Ctrl+C 停止")
+	return sh, nil
+}
 
-	s := newServer(dir)
-	go s.watchdog(ctx)
-	go s.progressLoop(ctx)
-	go s.settleGroups(ctx)
-	go func() {
-		<-ctx.Done()
-		ln.Close()
-		s.closeAll()
-	}()
+// runServerInteractive 启动服务端并进入交互指令循环。
+func runServerInteractive(ctx context.Context, port int, dir string, threads, retries, jobs int, verbose bool) error {
+	sh, err := startServerShell(ctx, port, dir, threads, retries, jobs, verbose)
+	if err != nil {
+		return err
+	}
+	defer sh.shutdown()
+	return sh.cmdLoop(ctx)
+}
 
-	s.logf("已启动，监听 %s (%s)", ln.Addr(), mode)
-	s.logf("接收的文件将保存到: %s", dir)
-	s.logf("提示: 以 . 开头的目录(如 .minecraft)在 Linux 下默认隐藏, 用 ls -a 查看")
+func (sh *serverShell) shutdown() {
+	sh.stopOne.Do(func() {
+		sh.stopped.Store(true)
+		sh.ln.Close()
+		sh.usersMu.Lock()
+		for _, u := range sh.users {
+			u.conn.Close()
+		}
+		sh.usersMu.Unlock()
+		sh.rcv.closeAll()
+	})
+}
 
+// acceptLoop 接受新连接：分块连接直接进入接收引擎，控制连接注册为用户。
+func (sh *serverShell) acceptLoop(ctx context.Context) {
 	for {
-		conn, err := ln.Accept()
+		conn, err := sh.ln.Accept()
 		if err != nil {
-			if ctx.Err() != nil {
-				return nil
+			if ctx.Err() != nil || sh.stopped.Load() {
+				return
 			}
-			return err
-		}
-		go s.handleConn(ctx, conn, verbose)
-	}
-}
-
-func (s *server) handleConn(ctx context.Context, conn net.Conn, verbose bool) {
-	defer conn.Close()
-	br := bufio.NewReaderSize(conn, 256*1024)
-	h, err := readHeader(br)
-	if err != nil {
-		s.logf("来自 %s 的连接头部无效: %v", conn.RemoteAddr(), err)
-		return
-	}
-	if s.isCompleted(h.ID) {
-		// 该传输已完成，重试的分块无需再写
-		conn.Write([]byte(ackOK))
-		return
-	}
-	tr, err := s.getTransfer(h, verbose)
-	if err != nil {
-		s.logf("传输 %s 失败: %v", h.Name, err)
-		return
-	}
-	tr.last.Store(time.Now().UnixNano())
-	if verbose {
-		s.logf("接收分块 %d/%d: %s (偏移 %d, %s) 来自 %s", h.Chunk+1, h.Chunks, h.Name, h.Start, humanSize(h.Len), conn.RemoteAddr())
-	}
-
-	w := &offsetWriter{f: tr.f, off: h.Start, tr: tr}
-	n, err := io.CopyN(w, br, h.Len)
-	tr.last.Store(time.Now().UnixNano())
-	if err != nil {
-		s.logf("传输 %s 分块 %d 中断: %v (已写 %s)", h.Name, h.Chunk+1, err, humanSize(n))
-		return
-	}
-	if s.chunkDone(tr, h.Chunk) {
-		s.finishTransfer(tr, verbose)
-	}
-	conn.Write([]byte(ackOK))
-}
-
-func (s *server) getTransfer(h chunkHeader, verbose bool) (*transfer, error) {
-	s.regMu.Lock()
-	defer s.regMu.Unlock()
-	if tr, ok := s.reg[h.ID]; ok {
-		return tr, nil
-	}
-	rel, err := sanitizeRelPath(h.Name)
-	if err != nil {
-		return nil, err
-	}
-	dest := filepath.Join(s.dir, filepath.FromSlash(rel))
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return nil, err
-	}
-	f, err := uniqueOpen(dest)
-	if err != nil {
-		return nil, fmt.Errorf("创建文件失败: %w", err)
-	}
-	tr := &transfer{id: h.ID, path: dest, name: rel, size: h.Size, f: f, total: h.Chunks, seen: make(map[int]bool)}
-	s.reg[h.ID] = tr
-	if verbose {
-		s.logf("开始接收 %s (%s, %d 个分块)", tr.name, humanSize(tr.size), tr.total)
-	} else {
-		s.noteGroupStart(tr.name, humanSize(tr.size), tr.total)
-	}
-	return tr, nil
-}
-
-// chunkDone 记录已收到的分块；重复分块（重试）不再计数，返回 true 表示全部完成。
-func (s *server) chunkDone(tr *transfer, idx int) bool {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	if tr.seen[idx] {
-		return false
-	}
-	tr.seen[idx] = true
-	return tr.done.Add(1) == int32(tr.total)
-}
-
-func (s *server) finishTransfer(tr *transfer, verbose bool) {
-	s.regMu.Lock()
-	delete(s.reg, tr.id)
-	s.regMu.Unlock()
-	tr.f.Close()
-	if fi, err := os.Stat(tr.path); err == nil && fi.Size() != tr.size {
-		os.Truncate(tr.path, tr.size)
-	}
-	s.compMu.Lock()
-	s.completed[tr.id] = time.Now()
-	s.compMu.Unlock()
-	if verbose {
-		s.logf("接收完成 %s (%s)", tr.name, humanSize(tr.size))
-		return
-	}
-	if !strings.Contains(tr.name, "/") {
-		s.logf("接收完成 %s (%s)", tr.name, humanSize(tr.size))
-		return
-	}
-	s.noteGroupDone(tr.name, tr.size)
-}
-
-// noteGroupStart 记录一个文件开始接收: 单文件保留原逐文件日志, 目录文件只输出一行。
-func (s *server) noteGroupStart(name, sizeStr string, chunks int) {
-	dirLike := strings.Contains(name, "/")
-	s.grpMu.Lock()
-	defer s.grpMu.Unlock()
-	if !dirLike {
-		s.logf("开始接收 %s (%s, %d 个分块)", name, sizeStr, chunks)
-		return
-	}
-	group := groupOf(name)
-	g := s.groups[group]
-	if g == nil {
-		// 新目录: 先结算已完成的其它目录, 再输出本目录的开始行
-		for og, o := range s.groups {
-			if og != group && o.files > 0 && o.active == 0 && !o.reported {
-				s.reportGroupLocked(o)
-				delete(s.groups, og)
-			}
-		}
-		g = &groupStat{group: group, dirLike: true}
-		s.groups[group] = g
-		s.logf("开始接收 %s (目录, 多个文件)", group)
-	}
-	g.active++
-	g.lastSeen = time.Now()
-}
-
-// noteGroupDone 记录一个文件接收完成, 并汇总到所属目录统计。
-func (s *server) noteGroupDone(name string, size int64) {
-	group := groupOf(name)
-	s.grpMu.Lock()
-	defer s.grpMu.Unlock()
-	g := s.groups[group]
-	if g == nil {
-		return
-	}
-	g.files++
-	g.bytes += size
-	g.active--
-	if g.active < 0 {
-		g.active = 0
-	}
-	g.lastSeen = time.Now()
-}
-
-// reportGroupLocked 输出一个目录接收汇总（调用方需持有 grpMu）。
-func (s *server) reportGroupLocked(g *groupStat) {
-	g.reported = true
-	msg := fmt.Sprintf("接收完成 %s (%d 个文件, 共 %s)", g.group, g.files, humanSize(g.bytes))
-	if strings.HasPrefix(g.group, ".") {
-		msg += " (以 . 开头是隐藏目录, 在保存目录下用 ls -a 查看)"
-	}
-	s.logf("%s", msg)
-}
-
-// finalizeIdleGroups 结算空闲一段时间的目录。
-func (s *server) finalizeIdleGroups(idle time.Duration) {
-	s.grpMu.Lock()
-	defer s.grpMu.Unlock()
-	cutoff := time.Now().Add(-idle)
-	for group, g := range s.groups {
-		if g.reported || g.files == 0 || g.active > 0 {
+			printLine("接受连接失败: %v", err)
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		if g.lastSeen.Before(cutoff) {
-			s.reportGroupLocked(g)
-			delete(s.groups, group)
-		}
+		go sh.dispatchConn(ctx, conn)
 	}
 }
 
-// finalizeAllGroups 服务停止时结算所有未输出的目录汇总。
-func (s *server) finalizeAllGroups() {
-	s.grpMu.Lock()
-	defer s.grpMu.Unlock()
-	for group, g := range s.groups {
-		if g.files > 0 && !g.reported {
-			s.reportGroupLocked(g)
-		}
-		delete(s.groups, group)
+func (sh *serverShell) dispatchConn(ctx context.Context, conn net.Conn) {
+	defer conn.Close()
+	br := bufio.NewReaderSize(conn, 256*1024)
+	line, err := readLineLimited(br, maxHeaderLen)
+	if err != nil {
+		return
 	}
-}
-
-// settleGroups 定时结算空闲目录, 服务退出时输出剩余汇总。
-func (s *server) settleGroups(ctx context.Context) {
-	t := time.NewTicker(1 * time.Second)
-	defer t.Stop()
+	// 分块连接：首部含 id/user
+	var h chunkHeader
+	if err := json.Unmarshal(line, &h); err == nil && h.ID != "" {
+		if !sh.validToken(h.User) {
+			return
+		}
+		sh.rcv.handleChunkConn(conn, br, h)
+		return
+	}
+	// 控制连接：第一条必须是 hello
+	var m ctrlMsg
+	if err := json.Unmarshal(line, &m); err != nil || m.Type != "hello" {
+		return
+	}
+	u := sh.registerUser(conn, m)
+	if u == nil {
+		return
+	}
+	printLine("[用户 %d] 已连接 (%s)%s", u.id, u.ip, inPortSuffix(u))
+	defer func() {
+		sh.unregisterUser(u)
+		printLine("[用户 %d] 已断开", u.id)
+	}()
 	for {
+		line, err := readLineLimited(br, maxHeaderLen)
+		if err != nil {
+			return
+		}
+		var m ctrlMsg
+		if err := json.Unmarshal(line, &m); err != nil {
+			continue
+		}
+		if !sh.handleCtrl(u, m) {
+			return
+		}
+	}
+}
+
+func (sh *serverShell) registerUser(conn net.Conn, m ctrlMsg) *user {
+	sh.usersMu.Lock()
+	defer sh.usersMu.Unlock()
+	token := m.Token
+	if token == "" {
+		token = randomID()
+	}
+	for sh.tokenExistsLocked(token) {
+		token = randomID()
+	}
+	u := &user{id: sh.nextID, token: token, conn: conn, ip: hostOf(conn.RemoteAddr().String()), inPort: m.Port}
+	sh.nextID++
+	sh.users[u.id] = u
+	return u
+}
+
+func (sh *serverShell) unregisterUser(u *user) {
+	sh.usersMu.Lock()
+	delete(sh.users, u.id)
+	sh.usersMu.Unlock()
+}
+
+func (sh *serverShell) tokenExistsLocked(token string) bool {
+	for _, u := range sh.users {
+		if u.token == token {
+			return true
+		}
+	}
+	return false
+}
+
+func (sh *serverShell) validToken(token string) bool {
+	sh.usersMu.Lock()
+	defer sh.usersMu.Unlock()
+	return sh.tokenExistsLocked(token)
+}
+
+func (sh *serverShell) userByToken(token string) *user {
+	sh.usersMu.Lock()
+	defer sh.usersMu.Unlock()
+	for _, u := range sh.users {
+		if u.token == token {
+			return u
+		}
+	}
+	return nil
+}
+
+func (sh *serverShell) userByID(id int) *user {
+	sh.usersMu.Lock()
+	defer sh.usersMu.Unlock()
+	return sh.users[id]
+}
+
+func (sh *serverShell) sendCtrl(u *user, m ctrlMsg) {
+	u.wmu.Lock()
+	defer u.wmu.Unlock()
+	writeJSONLine(u.conn, m)
+}
+
+// handleCtrl 处理来自客户端的控制消息。
+func (sh *serverShell) handleCtrl(u *user, m ctrlMsg) bool {
+	switch m.Type {
+	case "ping":
+		sh.sendCtrl(u, ctrlMsg{Type: "pong", Ts: m.Ts})
+	case "pong":
+		rtt := time.Since(time.Unix(0, m.Ts))
+		printLine("[用户 %d] 延迟: %s", u.id, rtt.Round(time.Microsecond))
+	case "ls_req":
+		sh.sendCtrl(u, ctrlMsg{Type: "ls_resp", Entries: listDir(sh.rcv.dir)})
+	case "ls_resp":
+		printLine("[用户 %d] 的目录:", u.id)
+		for _, e := range m.Entries {
+			printLine("  %s", e)
+		}
+	case "send":
+		// 客户端 tp -me: 服务端把文件推送给客户端
+		go sh.pushToUser(u, m.Name)
+	case "bye":
+		return false
+	default:
+		printLine("[用户 %d] 未知控制消息: %s", u.id, m.Type)
+	}
+	return true
+}
+
+// cmdLoop 读取并执行服务端指令，直到 stop 或 ctx 取消。
+func (sh *serverShell) cmdLoop(ctx context.Context) error {
+	cmdCh := make(chan string, 16)
+	go func() {
+		sc := bufio.NewScanner(os.Stdin)
+		for sc.Scan() {
+			select {
+			case cmdCh <- strings.TrimSpace(sc.Text()):
+			case <-ctx.Done():
+				return
+			}
+		}
+		close(cmdCh)
+	}()
+	for {
+		prompt()
 		select {
 		case <-ctx.Done():
-			s.finalizeAllGroups()
-			return
-		case <-t.C:
-			s.finalizeIdleGroups(2 * time.Second)
-		}
-	}
-}
-
-func (s *server) isCompleted(id string) bool {
-	s.compMu.Lock()
-	defer s.compMu.Unlock()
-	_, ok := s.completed[id]
-	return ok
-}
-
-// snapshot 汇总当前进行中传输的接收进度。
-func (s *server) snapshot() (received, size int64, name string, count int) {
-	s.regMu.Lock()
-	defer s.regMu.Unlock()
-	count = len(s.reg)
-	if count == 0 {
-		return 0, 0, "", 0
-	}
-	for _, tr := range s.reg {
-		r := tr.received.Load()
-		if r > tr.size {
-			r = tr.size
-		}
-		received += r
-		size += tr.size
-		if count == 1 {
-			name = tr.name
-		}
-	}
-	return received, size, name, count
-}
-
-// progressLoop 渲染服务端接收进度条：终端下用 \r 在同一行内刷新；非终端（重定向/日志）只在结束时输出一行汇总。
-func (s *server) progressLoop(ctx context.Context) {
-	tty := isTerminal(os.Stdout)
-	tick := time.NewTicker(200 * time.Millisecond)
-	defer tick.Stop()
-	var (
-		prevTotal int64
-		prevTime  time.Time
-		rate      float64
-		wasActive bool
-		lastName  string
-		lastSize  int64
-	)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-		}
-		received, size, name, count := s.snapshot()
-		now := time.Now()
-		if count > 0 {
-			if !wasActive {
-				prevTotal, prevTime, rate = 0, now, 0
+			return nil
+		case cmd, ok := <-cmdCh:
+			if !ok {
+				return nil
 			}
-			if !prevTime.IsZero() && now.After(prevTime) {
-				inst := float64(received-prevTotal) / now.Sub(prevTime).Seconds()
-				if inst < 0 {
-					inst = 0
-				}
-				if rate == 0 {
-					rate = inst
-				} else {
-					rate = rate*0.7 + inst*0.3
-				}
+			clearPromptFlag()
+			if cmd == "" {
+				continue
 			}
-			prevTotal, prevTime = received, now
-			lastName, lastSize = name, size
-			s.renderProgress(tty, received, size, name, count, rate, false)
-			wasActive = true
-		} else if wasActive {
-			// 全部传输完成，输出最终一行（此时必然已全部接收）
-			s.renderProgress(tty, lastSize, lastSize, lastName, 1, rate, true)
-			wasActive = false
-			prevTotal, rate = 0, 0
-		}
-	}
-}
-
-func (s *server) renderProgress(tty bool, received, size int64, name string, count int, rate float64, final bool) {
-	pct := 0.0
-	if size > 0 {
-		pct = float64(received) * 100 / float64(size)
-		if pct > 100 {
-			pct = 100
-		}
-	}
-	remaining := size - received
-	if remaining < 0 {
-		remaining = 0
-	}
-	eta := "--:--"
-	if rate > 0 && remaining > 0 {
-		eta = etaStr(time.Duration(float64(remaining) / rate * float64(time.Second)))
-	}
-	label := name
-	if count > 1 {
-		label = fmt.Sprintf("%d 个传输", count)
-	}
-	line := fmt.Sprintf("接收中 %5.1f%% %s %9s/s 剩余 %s (%s/%s) %s",
-		pct, bar(pct, 20), humanRate(rate), eta, humanSize(received), humanSize(size), truncate(label, 16))
-
-	outMu.Lock()
-	defer outMu.Unlock()
-	if tty {
-		fmt.Fprintf(os.Stdout, "\r%-95s", line)
-		if final {
-			progressLive = false
-			fmt.Fprintln(os.Stdout)
-		} else {
-			progressLive = true
-		}
-	} else if final {
-		fmt.Fprintln(os.Stdout, line)
-	}
-}
-
-func (s *server) watchdog(ctx context.Context) {
-	t := time.NewTicker(60 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			cutoff := time.Now().Add(-30 * time.Minute).UnixNano()
-			s.regMu.Lock()
-			for id, tr := range s.reg {
-				if tr.last.Load() < cutoff {
-					tr.f.Close()
-					delete(s.reg, id)
-					s.grpMu.Lock()
-					if g := s.groups[groupOf(tr.name)]; g != nil && g.active > 0 {
-						g.active--
-					}
-					s.grpMu.Unlock()
-					s.logf("清理超时未完成的传输: %s", tr.name)
-				}
+			if !sh.execCmd(cmd) {
+				printLine("服务端已停止")
+				return nil
 			}
-			s.regMu.Unlock()
-			compCutoff := time.Now().Add(-1 * time.Hour)
-			s.compMu.Lock()
-			for id, at := range s.completed {
-				if at.Before(compCutoff) {
-					delete(s.completed, id)
-				}
-			}
-			s.compMu.Unlock()
 		}
 	}
 }
 
-func (s *server) closeAll() {
-	s.regMu.Lock()
-	defer s.regMu.Unlock()
-	for id, tr := range s.reg {
-		tr.f.Close()
-		delete(s.reg, id)
+func (sh *serverShell) execCmd(line string) bool {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return true
 	}
-	s.finalizeAllGroups()
+	switch fields[0] {
+	case "help":
+		printLine("服务端指令: ls | ls 用户id | ping 用户id | kick 用户id | tp 文件 用户id | tp -me 文件 用户id | stop")
+		return true
+	case "stop":
+		return false
+	case "ls":
+		if len(fields) == 1 {
+			sh.listUsers()
+			return true
+		}
+		id, err := strconv.Atoi(fields[1])
+		if err != nil {
+			printLine("用法: ls 用户id")
+			return true
+		}
+		u := sh.userByID(id)
+		if u == nil {
+			printLine("用户 %d 不存在", id)
+			return true
+		}
+		sh.sendCtrl(u, ctrlMsg{Type: "ls_req"})
+		return true
+	case "ping":
+		if len(fields) < 2 {
+			printLine("用法: ping 用户id")
+			return true
+		}
+		id, err := strconv.Atoi(fields[1])
+		if err != nil {
+			printLine("用户id 无效")
+			return true
+		}
+		u := sh.userByID(id)
+		if u == nil {
+			printLine("用户 %d 不存在", id)
+			return true
+		}
+		sh.sendCtrl(u, ctrlMsg{Type: "ping", Ts: time.Now().UnixNano()})
+		return true
+	case "kick":
+		if len(fields) < 2 {
+			printLine("用法: kick 用户id")
+			return true
+		}
+		id, err := strconv.Atoi(fields[1])
+		if err != nil {
+			printLine("用户id 无效")
+			return true
+		}
+		u := sh.userByID(id)
+		if u == nil {
+			printLine("用户 %d 不存在", id)
+			return true
+		}
+		sh.sendCtrl(u, ctrlMsg{Type: "kick", Msg: "管理员将你踢出"})
+		u.conn.Close()
+		sh.unregisterUser(u)
+		printLine("已踢出用户 %d", id)
+		return true
+	case "tp":
+		return sh.execTp(fields)
+	default:
+		printLine("未知指令: %s（输入 help 查看）", fields[0])
+		return true
+	}
 }
 
-// offsetWriter 按指定偏移写入同一文件句柄，各分块并发安全，并累计已写入字节。
-type offsetWriter struct {
-	f   *os.File
-	off int64
-	tr  *transfer
+// execTp 处理服务端 tp 指令: tp 文件 用户id / tp -me 文件 用户id。
+func (sh *serverShell) execTp(fields []string) bool {
+	me := false
+	rest := fields[1:]
+	if len(rest) > 0 && rest[0] == "-me" {
+		me = true
+		rest = rest[1:]
+	}
+	if len(rest) < 2 {
+		printLine("用法: tp 文件 用户id 或 tp -me 文件 用户id")
+		return true
+	}
+	path, idStr := rest[0], rest[1]
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		printLine("用户id 无效")
+		return true
+	}
+	u := sh.userByID(id)
+	if u == nil {
+		printLine("用户 %d 不存在", id)
+		return true
+	}
+	if me {
+		// 拉取: 通知客户端把本地文件发到服务端
+		sh.sendCtrl(u, ctrlMsg{Type: "send", Name: path})
+		return true
+	}
+	// 推送: 服务端文件发给客户端
+	if u.inPort == 0 {
+		printLine("用户 %d 未开放接收端口，无法推送", id)
+		return true
+	}
+	go sh.pushToUser(u, path)
+	return true
 }
 
-func (w *offsetWriter) Write(p []byte) (int, error) {
-	n, err := w.f.WriteAt(p, w.off)
-	w.off += int64(n)
-	if w.tr != nil {
-		w.tr.received.Add(int64(n))
+// pushToUser 把服务端文件推送给指定用户（服务端作为发送端）。
+func (sh *serverShell) pushToUser(u *user, path string) {
+	full := path
+	if !filepath.IsAbs(path) {
+		// 相对路径基于服务端保存目录，与 ls 显示一致
+		full = filepath.Join(sh.rcv.dir, path)
 	}
-	return n, err
+	items, err := collectFiles([]string{full})
+	if err != nil {
+		printLine("发送 %s 给用户 %d 失败: %v", path, u.id, err)
+		return
+	}
+	ip := u.ip
+	if ip == "" {
+		ip = "127.0.0.1"
+	}
+	dial := func() (net.Conn, error) {
+		return net.DialTimeout("tcp", net.JoinHostPort(ip, strconv.Itoa(u.inPort)), 5*time.Second)
+	}
+	if err := sendItems(sh.ctx, dial, u.token, items, sh.threads, sh.retries, sh.jobs, sh.verbose); err != nil {
+		printLine("发送 %s 给用户 %d 失败: %v", path, u.id, err)
+		return
+	}
+	printLine("已发送 %s 给用户 %d (%d 个文件)", path, u.id, len(items))
+}
+
+func (sh *serverShell) listUsers() {
+	sh.usersMu.Lock()
+	ids := make([]int, 0, len(sh.users))
+	byID := make(map[int]*user, len(sh.users))
+	for id, u := range sh.users {
+		ids = append(ids, id)
+		byID[id] = u
+	}
+	sh.usersMu.Unlock()
+	sort.Ints(ids)
+	if len(ids) == 0 {
+		printLine("当前没有用户连接")
+		return
+	}
+	for _, id := range ids {
+		u := byID[id]
+		printLine("用户 %d: %s (令牌 %s, 接收端口 %d)", id, u.ip, shortToken(u.token), u.inPort)
+	}
+}
+
+func inPortSuffix(u *user) string {
+	if u.inPort > 0 {
+		return fmt.Sprintf(" (接收端口 %d)", u.inPort)
+	}
+	return ""
+}
+
+func hostOf(addr string) string {
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
+}
+
+func shortToken(t string) string {
+	if len(t) > 8 {
+		return t[:8]
+	}
+	return t
 }

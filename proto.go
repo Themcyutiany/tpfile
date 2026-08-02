@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	protoVersion = 1
+	protoVersion = 2
 	maxHeaderLen = 1 << 20 // 1 MiB，防止恶意超大头
 	ackOK        = "ok\n"  // 分块写入成功的确认
 )
@@ -17,6 +17,7 @@ const (
 type chunkHeader struct {
 	V      int    `json:"v"`      // 协议版本
 	ID     string `json:"id"`     // 传输 ID（一次文件传输的所有分块共用）
+	User   string `json:"user"`   // 会话令牌，用于服务端把分块连接归属到某个用户
 	Name   string `json:"name"`   // 相对路径，使用 / 分隔
 	Size   int64  `json:"size"`   // 文件总大小
 	Chunk  int    `json:"chunk"`  // 当前分块下标（从 0 开始）
@@ -25,14 +26,32 @@ type chunkHeader struct {
 	Len    int64  `json:"len"`    // 本分块字节数
 }
 
-func writeHeader(w io.Writer, h chunkHeader) error {
-	b, err := json.Marshal(h)
+// ctrlMsg 是控制连接上的会话消息（JSON + 换行）。
+// type: hello / bye / kick / ping / pong / ls_req / ls_resp / send
+type ctrlMsg struct {
+	Type    string   `json:"type"`
+	Token   string   `json:"token,omitempty"`   // 会话令牌
+	Name    string   `json:"name,omitempty"`    // 文件/目录路径
+	Size    int64    `json:"size,omitempty"`    // 文件大小
+	Port    int      `json:"port,omitempty"`    // 客户端入站传输端口
+	ID      int      `json:"id,omitempty"`      // 用户 id（服务端分配）
+	Msg     string   `json:"msg,omitempty"`     // 附加消息（如踢出原因）
+	Entries []string `json:"entries,omitempty"` // ls 目录列表
+	Ts      int64    `json:"ts,omitempty"`      // ping 时间戳 (UnixNano)
+}
+
+func writeJSONLine(w io.Writer, v any) error {
+	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
 	b = append(b, '\n')
 	_, err = w.Write(b)
 	return err
+}
+
+func writeHeader(w io.Writer, h chunkHeader) error {
+	return writeJSONLine(w, h)
 }
 
 func readHeader(r *bufio.Reader) (chunkHeader, error) {
@@ -50,8 +69,8 @@ func readHeader(r *bufio.Reader) (chunkHeader, error) {
 	if h.V != protoVersion {
 		return h, fmt.Errorf("不支持的协议版本 %d", h.V)
 	}
-	if h.ID == "" || h.Name == "" {
-		return h, fmt.Errorf("头部缺少 id/name")
+	if h.ID == "" || h.User == "" || h.Name == "" {
+		return h, fmt.Errorf("头部缺少 id/user/name")
 	}
 	if h.Size < 0 || h.Chunk < 0 || h.Chunks <= 0 || h.Chunk >= h.Chunks {
 		return h, fmt.Errorf("分块信息无效")
