@@ -19,7 +19,7 @@ try {
   $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ 'User-Agent' = 'tpfile-installer' } -TimeoutSec 15
   $Tag = [string]$rel.tag_name
 } catch {}
-if (-not $Tag) { $Tag = '1.4.1' }
+if (-not $Tag) { $Tag = '1.4.2' }
 
 # 2. 根据 CPU 架构选择安装包
 $arch = $env:PROCESSOR_ARCHITECTURE

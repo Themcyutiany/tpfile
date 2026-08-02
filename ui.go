@@ -57,6 +57,27 @@ func paint(code, s string) string {
 
 func runeLen(s string) int { return utf8.RuneCountInString(s) }
 
+// dispWidth 返回字符串在终端上占用的显示宽度：CJK 全角字符按 2 列计，
+// 其余按 1 列（ASCII 控制符不计）。用于光标定位与列表对齐。
+func dispWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		switch {
+		case r == 0:
+			// 不计
+		case r >= 0x1100 && (r <= 0x115F || r == 0x2329 || r == 0x232A ||
+			(r >= 0x2E80 && r <= 0xA4CF && r != 0x303F) ||
+			(r >= 0xAC00 && r <= 0xD7A3) || (r >= 0xF900 && r <= 0xFAFF) ||
+			(r >= 0xFE30 && r <= 0xFE4F) || (r >= 0xFF00 && r <= 0xFF60) ||
+			(r >= 0xFFE0 && r <= 0xFFE6) || (r >= 0x20000 && r <= 0x3FFFD)):
+			w += 2
+		default:
+			w++
+		}
+	}
+	return w
+}
+
 // ---------- 输出 ----------
 
 // printLine 输出一行日志。等待输入时把消息放在提示行下方，连续多条消息不会
@@ -120,7 +141,9 @@ func clearPromptFlag() {
 	promptShown = false
 	promptOnScreen = false
 	promptDirty = false
-	editActive = false
+	// 注意：不要在这里把 editActive 置为 false。editActive 只归行编辑器管理
+	//（readLineInteractive 启动/结束时开关）；主循环可能在读取协程已经启动了
+	// 下一行编辑器之后才执行到这里，一旦覆盖会导致“能输入但屏幕不显示”。
 }
 
 // drawInputLocked 重绘提示行（进度条存在时一并重绘），调用方需持有 outMu。
@@ -136,7 +159,7 @@ func drawInputLocked() {
 	if editActive {
 		sb.WriteString(string(editBuf))
 		if editPos < runeLen(string(editBuf)) {
-			fmt.Fprintf(&sb, "\x1b[%dD", runeLen(string(editBuf))-editPos)
+			fmt.Fprintf(&sb, "\x1b[%dD", dispWidth(string(editBuf[editPos:])))
 		}
 	}
 	fmt.Fprint(os.Stdout, sb.String())
@@ -179,13 +202,13 @@ func renderProgress(line string, final bool) {
 		}
 		return
 	}
-	if promptShown {
+	if promptShown || editActive {
 		// 行尾保留提示符（含正在编辑的缓冲），方便传输期间继续输入
 		fmt.Fprint(os.Stdout, paint(promptColor, "> "))
 		if editActive {
 			fmt.Fprint(os.Stdout, string(editBuf))
 			if editPos < runeLen(string(editBuf)) {
-				fmt.Fprintf(os.Stdout, "\x1b[%dD", runeLen(string(editBuf))-editPos)
+				fmt.Fprintf(os.Stdout, "\x1b[%dD", dispWidth(string(editBuf[editPos:])))
 			}
 		}
 		promptOnScreen = true
@@ -206,7 +229,7 @@ func printList(header string, entries []string) {
 	width := termWidth()
 	maxW := 0
 	for _, e := range entries {
-		if w := runeLen(e); w > maxW {
+		if w := dispWidth(e); w > maxW {
 			maxW = w
 		}
 	}
@@ -235,7 +258,7 @@ func printList(header string, entries []string) {
 }
 
 func padRight(s string, w int) string {
-	n := runeLen(s)
+	n := dispWidth(s)
 	if n >= w {
 		return s
 	}

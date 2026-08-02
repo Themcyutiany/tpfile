@@ -218,3 +218,44 @@ func TestInteractiveServerNonTTY(t *testing.T) {
 		t.Fatalf("未看到停止输出: %q", string(out))
 	}
 }
+
+// TestClearPromptFlagKeepsEditActive 回归测试：主循环清提示行时不得误清编辑器的
+// editActive 状态（否则出现“能输入但屏幕不显示”的竞态 bug）。
+func TestClearPromptFlagKeepsEditActive(t *testing.T) {
+	outMu.Lock()
+	editActive = true
+	editBuf = []rune("abc")
+	editPos = 3
+	outMu.Unlock()
+	clearPromptFlag()
+	outMu.Lock()
+	defer outMu.Unlock()
+	if !editActive {
+		t.Fatal("clearPromptFlag 不应清除 editActive")
+	}
+	if string(editBuf) != "abc" || editPos != 3 {
+		t.Fatal("clearPromptFlag 不应改动编辑缓冲")
+	}
+}
+
+// TestDispWidth 验证终端显示宽度计算（CJK 全角按 2 列）。
+func TestDispWidth(t *testing.T) {
+	cases := []struct {
+		s    string
+		want int
+	}{
+		{"abc", 3},
+		{"中文", 4},
+		{"a中文b", 6},
+		{"123", 3},
+		{"", 0},
+		{"！", 2}, // 全角感叹号
+		{"minecraft.tar", 13},
+	}
+	for _, c := range cases {
+		if got := dispWidth(c.s); got != c.want {
+			t.Errorf("dispWidth(%q) = %d, want %d", c.s, got, c.want)
+		}
+	}
+}
+

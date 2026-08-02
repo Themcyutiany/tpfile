@@ -9,7 +9,7 @@ import (
 	"syscall"
 )
 
-const version = "1.4.1"
+const version = "1.4.2"
 
 func usage() {
 	fmt.Fprint(flag.CommandLine.Output(), `tpfile - 局域网交互式文件传输工具 (v`+version+`)
