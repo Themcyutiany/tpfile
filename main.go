@@ -9,7 +9,7 @@ import (
 	"syscall"
 )
 
-const version = "1.3.1"
+const version = "1.4.0"
 
 func usage() {
 	fmt.Fprint(flag.CommandLine.Output(), `tpfile - 局域网交互式文件传输工具 (v`+version+`)
@@ -22,17 +22,22 @@ func usage() {
   客户端:
     tp 文件或文件夹             发送本地文件/目录到服务端
     tp -me 服务端文件           从服务端下载文件到本地
-    ls                          查看服务端当前目录
+    ls [路径]                   查看本地当前目录（Linux ls 风格）
+    lst [路径]                  查看服务端当前目录
     ping                        测试与服务端的延迟
     stop / Ctrl+C               断开连接
   服务端:
     list                        列出已连接的用户
-    ls 用户id                   查看该用户客户端的当前目录
+    ls [路径]                   查看服务端本地目录（保存目录）
+    lst 用户id [路径]           查看该用户客户端的当前目录
     ping 用户id                 测试与该用户的延迟
     kick 用户id                 踢出该用户
     tp 文件 用户id              发送服务端文件到该用户
     tp -me 用户id 文件          从该用户客户端拉取文件
     stop / Ctrl+C               停止服务
+
+交互提示:
+  > 提示符支持 Tab 补全本地文件路径、左右方向键移动光标
 
 参数:
   -s, --serve            服务端模式
@@ -118,6 +123,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	defer setRawMode(false)
 
 	var err error
 	if serve {

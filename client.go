@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"time"
 )
@@ -59,10 +58,10 @@ func runClientInteractive(ctx context.Context, server, proxy string, threads, re
 	go sh.rcv.watchdog(ctx)
 	go sh.rcv.settleGroups(ctx)
 
-	printLine("已连接 %s", server)
-	printLine("输入 help 查看指令；stop 或 Ctrl+C 断开")
+	printOK("已连接 %s", server)
+	printDim("输入 help 查看指令；stop 或 Ctrl+C 断开")
 	if sh.inPort == 0 {
-		printLine("提示: 本机无法监听端口，服务端将不能推送文件给你")
+		printDim("提示: 本机无法监听端口，服务端将不能推送文件给你")
 	}
 
 	ctrlCh := make(chan ctrlMsg, 16)
@@ -86,18 +85,7 @@ func runClientInteractive(ctx context.Context, server, proxy string, threads, re
 		}
 	}()
 
-	cmdCh := make(chan string, 16)
-	go func() {
-		sc := bufio.NewScanner(os.Stdin)
-		for sc.Scan() {
-			select {
-			case cmdCh <- strings.TrimSpace(sc.Text()):
-			case <-ctx.Done():
-				return
-			}
-		}
-		close(cmdCh)
-	}()
+	cmdCh := readLines(ctx)
 
 	for {
 		prompt()
@@ -149,23 +137,20 @@ func (sh *clientShell) close() {
 func (sh *clientShell) handleCtrl(m ctrlMsg) bool {
 	switch m.Type {
 	case "kick":
-		printLine("被管理员踢出: %s", m.Msg)
+		printErr("被管理员踢出: %s", m.Msg)
 		return false
 	case "ping":
 		writeJSONLine(sh.conn, ctrlMsg{Type: "pong", Ts: m.Ts})
 		return true
 	case "pong":
 		rtt := time.Since(time.Unix(0, m.Ts))
-		printLine("延迟: %s", rtt.Round(time.Microsecond))
+		printOK("来自服务端 (%s) 的回复: 时间=%s", hostOf(sh.server), fmtRTT(rtt))
 		return true
 	case "ls_req":
-		writeJSONLine(sh.conn, ctrlMsg{Type: "ls_resp", Entries: listDir(".")})
+		writeJSONLine(sh.conn, ctrlMsg{Type: "ls_resp", Entries: listPathEntries(".", m.Name)})
 		return true
 	case "ls_resp":
-		printLine("服务端目录:")
-		for _, e := range m.Entries {
-			printLine("  %s", e)
-		}
+		printList("服务端目录:", m.Entries)
 		return true
 	case "send":
 		// 服务端 tp -me: 把本地文件发给服务端
@@ -184,7 +169,7 @@ func (sh *clientShell) execCmd(line string) bool {
 	}
 	switch fields[0] {
 	case "help":
-		printLine("客户端指令: tp 文件/文件夹 | tp -me 服务端文件 | ls | ping | stop")
+		printDim("客户端指令: tp 文件/文件夹 | tp -me 服务端文件 | ls [路径] | lst [路径] | ping | stop")
 		return true
 	case "stop":
 		return false
@@ -193,29 +178,42 @@ func (sh *clientShell) execCmd(line string) bool {
 		writeJSONLine(sh.conn, ctrlMsg{Type: "ping", Ts: sh.lastPing})
 		return true
 	case "ls":
-		writeJSONLine(sh.conn, ctrlMsg{Type: "ls_req"})
+		// ls 列出本地当前目录
+		path := ""
+		if len(fields) > 1 {
+			path = fields[1]
+		}
+		printList("", listPathEntries(".", path))
+		return true
+	case "lst":
+		// lst 列出服务端当前目录
+		path := ""
+		if len(fields) > 1 {
+			path = fields[1]
+		}
+		writeJSONLine(sh.conn, ctrlMsg{Type: "ls_req", Name: path})
 		return true
 	case "tp":
 		if len(fields) >= 2 && fields[1] == "-me" {
 			if len(fields) < 3 {
-				printLine("用法: tp -me 服务端目录里的文件")
+				printDim("用法: tp -me 服务端目录里的文件")
 				return true
 			}
 			if sh.inPort == 0 {
-				printLine("本机无法接收推送，请检查监听端口")
+				printErr("本机无法接收推送，请检查监听端口")
 				return true
 			}
 			writeJSONLine(sh.conn, ctrlMsg{Type: "send", Name: fields[2]})
 			return true
 		}
 		if len(fields) < 2 {
-			printLine("用法: tp 文件或文件夹")
+			printDim("用法: tp 文件或文件夹")
 			return true
 		}
 		go sh.sendLocal(sh.ctx, fields[1])
 		return true
 	default:
-		printLine("未知指令: %s（输入 help 查看）", fields[0])
+		printErr("未知指令: %s（输入 help 查看）", fields[0])
 		return true
 	}
 }
@@ -224,17 +222,17 @@ func (sh *clientShell) execCmd(line string) bool {
 func (sh *clientShell) sendLocal(ctx context.Context, path string) {
 	items, err := collectFiles([]string{path})
 	if err != nil {
-		printLine("发送 %s 失败: %v", path, err)
+		printErr("发送 %s 失败: %v", path, err)
 		return
 	}
 	dial := func() (net.Conn, error) {
 		return dialTarget(sh.proxy, sh.server)
 	}
 	if err := sendItems(ctx, dial, sh.token, items, sh.threads, sh.retries, sh.jobs, sh.verbose); err != nil {
-		printLine("发送 %s 失败: %v", path, err)
+		printErr("发送 %s 失败: %v", path, err)
 		return
 	}
-	printLine("已发送 %s (%d 个文件)", path, len(items))
+	printOK("已发送 %s (%d 个文件)", path, len(items))
 }
 
 // acceptChunks 接受服务端推来的分块连接（客户端作为接收端）。

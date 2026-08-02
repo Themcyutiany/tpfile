@@ -77,6 +77,11 @@ func (r *receiver) logf(format string, args ...any) {
 	printLine("[%s] "+format, append([]any{r.tag}, args...)...)
 }
 
+// okf 输出一条绿色成功日志（接收完成等）。
+func (r *receiver) okf(format string, args ...any) {
+	printOK("[%s] "+format, append([]any{r.tag}, args...)...)
+}
+
 // handleChunkConn 处理一条分块连接（首部已由调用方解析）。
 func (r *receiver) handleChunkConn(conn net.Conn, br *bufio.Reader, h chunkHeader) {
 	defer conn.Close()
@@ -158,11 +163,11 @@ func (r *receiver) finishTransfer(tr *transfer) {
 	r.completed[tr.id] = time.Now()
 	r.compMu.Unlock()
 	if r.verbose {
-		r.logf("接收完成 %s (%s)", tr.name, humanSize(tr.size))
+		r.okf("接收完成 %s (%s)", tr.name, humanSize(tr.size))
 		return
 	}
 	if !strings.Contains(tr.name, "/") {
-		r.logf("接收完成 %s (%s)", tr.name, humanSize(tr.size))
+		r.okf("接收完成 %s (%s)", tr.name, humanSize(tr.size))
 		return
 	}
 	r.noteGroupDone(tr.name, tr.size)
@@ -322,7 +327,7 @@ func (r *receiver) reportGroupLocked(g *groupStat) {
 	if strings.HasPrefix(g.group, ".") {
 		msg += " (以 . 开头是隐藏目录, 在保存目录下用 ls -a 查看)"
 	}
-	r.logf("%s", msg)
+	r.okf("%s", msg)
 }
 
 // finalizeIdleGroups 结算空闲一段时间的目录。

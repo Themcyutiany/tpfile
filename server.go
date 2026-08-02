@@ -79,10 +79,10 @@ func startServerShell(ctx context.Context, port int, dir string, threads, retrie
 	go sh.rcv.watchdog(ctx)
 	go sh.rcv.settleGroups(ctx)
 	go sh.acceptLoop(ctx)
-	printLine("tpfile 服务端已启动，监听 %s (%s)", ln.Addr(), mode)
-	printLine("接收的文件将保存到: %s", dir)
-	printLine("提示: 以 . 开头的目录(如 .minecraft)在 Linux 下默认隐藏, 用 ls -a 查看")
-	printLine("输入 help 查看服务端指令；stop 或 Ctrl+C 停止")
+	printOK("tpfile 服务端已启动，监听 %s (%s)", ln.Addr(), mode)
+	printDim("接收的文件将保存到: %s", dir)
+	printDim("提示: 以 . 开头的目录(如 .minecraft)也会显示在 ls 列表里")
+	printDim("输入 help 查看服务端指令；stop 或 Ctrl+C 停止")
 	return sh, nil
 }
 
@@ -117,7 +117,7 @@ func (sh *serverShell) acceptLoop(ctx context.Context) {
 			if ctx.Err() != nil || sh.stopped.Load() {
 				return
 			}
-			printLine("接受连接失败: %v", err)
+			printErr("接受连接失败: %v", err)
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
@@ -150,10 +150,10 @@ func (sh *serverShell) dispatchConn(ctx context.Context, conn net.Conn) {
 	if u == nil {
 		return
 	}
-	printLine("[用户 %d] 已连接 (%s)%s", u.id, u.ip, inPortSuffix(u))
+	printInfo("[用户 %d] 已连接 (%s)%s", u.id, u.ip, inPortSuffix(u))
 	defer func() {
 		sh.unregisterUser(u)
-		printLine("[用户 %d] 已断开", u.id)
+		printInfo("[用户 %d] 已断开", u.id)
 	}()
 	for {
 		line, err := readLineLimited(br, maxHeaderLen)
@@ -237,39 +237,25 @@ func (sh *serverShell) handleCtrl(u *user, m ctrlMsg) bool {
 		sh.sendCtrl(u, ctrlMsg{Type: "pong", Ts: m.Ts})
 	case "pong":
 		rtt := time.Since(time.Unix(0, m.Ts))
-		printLine("[用户 %d] 延迟: %s", u.id, rtt.Round(time.Microsecond))
+		printOK("来自用户 %d (%s) 的回复: 时间=%s", u.id, u.ip, fmtRTT(rtt))
 	case "ls_req":
-		sh.sendCtrl(u, ctrlMsg{Type: "ls_resp", Entries: listDir(sh.rcv.dir)})
+		sh.sendCtrl(u, ctrlMsg{Type: "ls_resp", Entries: listPathEntries(sh.rcv.dir, m.Name)})
 	case "ls_resp":
-		printLine("[用户 %d] 的目录:", u.id)
-		for _, e := range m.Entries {
-			printLine("  %s", e)
-		}
+		printList(fmt.Sprintf("[用户 %d] 的目录:", u.id), m.Entries)
 	case "send":
 		// 客户端 tp -me: 服务端把文件推送给客户端
 		go sh.pushToUser(u, m.Name)
 	case "bye":
 		return false
 	default:
-		printLine("[用户 %d] 未知控制消息: %s", u.id, m.Type)
+		printErr("[用户 %d] 未知控制消息: %s", u.id, m.Type)
 	}
 	return true
 }
 
 // cmdLoop 读取并执行服务端指令，直到 stop 或 ctx 取消。
 func (sh *serverShell) cmdLoop(ctx context.Context) error {
-	cmdCh := make(chan string, 16)
-	go func() {
-		sc := bufio.NewScanner(os.Stdin)
-		for sc.Scan() {
-			select {
-			case cmdCh <- strings.TrimSpace(sc.Text()):
-			case <-ctx.Done():
-				return
-			}
-		}
-		close(cmdCh)
-	}()
+	cmdCh := readLines(ctx)
 	for {
 		prompt()
 		select {
@@ -284,7 +270,7 @@ func (sh *serverShell) cmdLoop(ctx context.Context) error {
 				continue
 			}
 			if !sh.execCmd(cmd) {
-				printLine("服务端已停止")
+				printOK("服务端已停止")
 				return nil
 			}
 		}
@@ -298,70 +284,99 @@ func (sh *serverShell) execCmd(line string) bool {
 	}
 	switch fields[0] {
 	case "help":
-		printLine("服务端指令: list | ls 用户id | ping 用户id | kick 用户id | tp 文件 用户id | tp -me 用户id 文件 | stop")
+		printDim("服务端指令: list | ls [路径] | lst 用户id [路径] | ping 用户id | kick 用户id | tp 文件 用户id | tp -me 用户id 文件 | stop")
 		return true
 	case "stop":
 		return false
-	case "list", "ls":
-		if len(fields) == 1 {
-			sh.listUsers()
+	case "list":
+		sh.listUsers()
+		return true
+	case "ls":
+		// ls 列出服务端本地目录（保存目录）
+		path := ""
+		if len(fields) > 1 {
+			path = fields[1]
+		}
+		sh.listLocal(path)
+		return true
+	case "lst":
+		// lst 用户id [路径]: 列出该用户客户端的目录
+		if len(fields) < 2 {
+			printDim("用法: lst 用户id [路径]")
 			return true
 		}
 		id, err := strconv.Atoi(fields[1])
 		if err != nil {
-			printLine("用法: ls 用户id")
+			printErr("用户id 无效")
 			return true
 		}
 		u := sh.userByID(id)
 		if u == nil {
-			printLine("用户 %d 不存在", id)
+			printErr("用户 %d 不存在", id)
 			return true
 		}
-		sh.sendCtrl(u, ctrlMsg{Type: "ls_req"})
+		path := ""
+		if len(fields) > 2 {
+			path = fields[2]
+		}
+		sh.sendCtrl(u, ctrlMsg{Type: "ls_req", Name: path})
 		return true
 	case "ping":
 		if len(fields) < 2 {
-			printLine("用法: ping 用户id")
+			printDim("用法: ping 用户id")
 			return true
 		}
 		id, err := strconv.Atoi(fields[1])
 		if err != nil {
-			printLine("用户id 无效")
+			printErr("用户id 无效")
 			return true
 		}
 		u := sh.userByID(id)
 		if u == nil {
-			printLine("用户 %d 不存在", id)
+			printErr("用户 %d 不存在", id)
 			return true
 		}
 		sh.sendCtrl(u, ctrlMsg{Type: "ping", Ts: time.Now().UnixNano()})
 		return true
 	case "kick":
 		if len(fields) < 2 {
-			printLine("用法: kick 用户id")
+			printDim("用法: kick 用户id")
 			return true
 		}
 		id, err := strconv.Atoi(fields[1])
 		if err != nil {
-			printLine("用户id 无效")
+			printErr("用户id 无效")
 			return true
 		}
 		u := sh.userByID(id)
 		if u == nil {
-			printLine("用户 %d 不存在", id)
+			printErr("用户 %d 不存在", id)
 			return true
 		}
 		sh.sendCtrl(u, ctrlMsg{Type: "kick", Msg: "管理员将你踢出"})
 		u.conn.Close()
 		sh.unregisterUser(u)
-		printLine("已踢出用户 %d", id)
+		printOK("已踢出用户 %d", id)
 		return true
 	case "tp":
 		return sh.execTp(fields)
 	default:
-		printLine("未知指令: %s（输入 help 查看）", fields[0])
+		printErr("未知指令: %s（输入 help 查看）", fields[0])
 		return true
 	}
+}
+
+// listLocal 列出服务端保存目录（可带子路径）。
+func (sh *serverShell) listLocal(path string) {
+	dir := sh.rcv.dir
+	if path != "" {
+		if filepath.IsAbs(path) {
+			printErr("路径无效: %s", path)
+			return
+		}
+		dir = filepath.Join(dir, filepath.FromSlash(path))
+	}
+	printList("", listDir(dir))
 }
 
 // execTp 处理服务端 tp 指令: tp 文件 用户id / tp -me 用户id 文件。
@@ -373,7 +388,7 @@ func (sh *serverShell) execTp(fields []string) bool {
 		rest = rest[1:]
 	}
 	if len(rest) < 2 {
-		printLine("用法: tp 文件 用户id 或 tp -me 用户id 文件")
+		printDim("用法: tp 文件 用户id 或 tp -me 用户id 文件")
 		return true
 	}
 	var path, idStr string
@@ -385,12 +400,12 @@ func (sh *serverShell) execTp(fields []string) bool {
 	}
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		printLine("用户id 无效")
+		printErr("用户id 无效")
 		return true
 	}
 	u := sh.userByID(id)
 	if u == nil {
-		printLine("用户 %d 不存在", id)
+		printErr("用户 %d 不存在", id)
 		return true
 	}
 	if me {
@@ -400,7 +415,7 @@ func (sh *serverShell) execTp(fields []string) bool {
 	}
 	// 推送: 服务端文件发给客户端
 	if u.inPort == 0 {
-		printLine("用户 %d 未开放接收端口，无法推送", id)
+		printErr("用户 %d 未开放接收端口，无法推送", id)
 		return true
 	}
 	go sh.pushToUser(u, path)
@@ -416,7 +431,7 @@ func (sh *serverShell) pushToUser(u *user, path string) {
 	}
 	items, err := collectFiles([]string{full})
 	if err != nil {
-		printLine("发送 %s 给用户 %d 失败: %v", path, u.id, err)
+		printErr("发送 %s 给用户 %d 失败: %v", path, u.id, err)
 		return
 	}
 	ip := u.ip
@@ -427,10 +442,10 @@ func (sh *serverShell) pushToUser(u *user, path string) {
 		return net.DialTimeout("tcp", net.JoinHostPort(ip, strconv.Itoa(u.inPort)), 5*time.Second)
 	}
 	if err := sendItems(sh.ctx, dial, u.token, items, sh.threads, sh.retries, sh.jobs, sh.verbose); err != nil {
-		printLine("发送 %s 给用户 %d 失败: %v", path, u.id, err)
+		printErr("发送 %s 给用户 %d 失败: %v", path, u.id, err)
 		return
 	}
-	printLine("已发送 %s 给用户 %d (%d 个文件)", path, u.id, len(items))
+	printOK("已发送 %s 给用户 %d (%d 个文件)", path, u.id, len(items))
 }
 
 func (sh *serverShell) listUsers() {
@@ -444,12 +459,13 @@ func (sh *serverShell) listUsers() {
 	sh.usersMu.Unlock()
 	sort.Ints(ids)
 	if len(ids) == 0 {
-		printLine("当前没有用户连接")
+		printDim("当前没有用户连接")
 		return
 	}
+	printDim("已连接的用户:")
 	for _, id := range ids {
 		u := byID[id]
-		printLine("用户 %d: %s (令牌 %s, 接收端口 %d)", id, u.ip, shortToken(u.token), u.inPort)
+		printInfo("用户 %d: %s (令牌 %s, 接收端口 %d)", id, u.ip, shortToken(u.token), u.inPort)
 	}
 }
 

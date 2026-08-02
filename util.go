@@ -33,6 +33,34 @@ func listDir(dir string) []string {
 	return out
 }
 
+// listPathEntries 列出 base 下（或子路径 path 下）的目录条目。
+// path 为空表示 base 本身；绝对路径会被拒绝。
+func listPathEntries(base, path string) []string {
+	if path == "" {
+		return listDir(base)
+	}
+	if filepath.IsAbs(path) {
+		return []string{"<路径无效>"}
+	}
+	return listDir(filepath.Join(base, filepath.FromSlash(path)))
+}
+
+// fmtRTT 把往返延迟格式化成可读文本（<1ms 用微秒，其余用毫秒）。
+func fmtRTT(d time.Duration) string {
+	switch {
+	case d < 0:
+		return "异常"
+	case d < time.Millisecond:
+		return fmt.Sprintf("%.0fµs", float64(d)/float64(time.Microsecond))
+	case d < time.Second:
+		return fmt.Sprintf("%.2fms", float64(d)/float64(time.Millisecond))
+	case d < time.Minute:
+		return fmt.Sprintf("%.2fs", d.Seconds())
+	default:
+		return ">60s"
+	}
+}
+
 // parseTarget 解析 "主机:端口"，兼容 IPv6（[::1]:1090 / ::1 / ::1:1090）。
 func parseTarget(addr string, defPort int) (string, error) {
 	if defPort < 1 || defPort > 65535 {
