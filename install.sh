@@ -23,7 +23,7 @@ fi
 if [ -z "$TAG" ] && command -v wget >/dev/null 2>&1; then
   TAG="$(wget -q --server-response -O /dev/null --timeout=10 "https://github.com/$REPO/releases/latest" 2>&1 | sed -n 's/^[[:space:]]*Location: .*\/releases\/tag\/\([^/]*\).*/\1/p' | head -n1 || true)"
 fi
-if [ -z "$TAG" ]; then TAG="1.4.3"; fi
+if [ -z "$TAG" ]; then TAG="1.5.0"; fi
 
 # 2. 根据 CPU 架构选择安装包
 case "$(uname -m)" in

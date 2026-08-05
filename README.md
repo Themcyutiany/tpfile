@@ -30,10 +30,12 @@ curl -fsSL https://raw.githubusercontent.com/Themcyutiany/tpfile/main/install.sh
 - **交互式会话**：客户端连上服务端后不退出，像聊天一样持续传文件
 - **双向传输**：客户端可上传，也可下载服务端文件；服务端同样可以推/拉用户文件
 - **用户管理**：服务端可查看在线用户、查看用户目录、踢出用户
-- **多线程并行**：每个文件 `-t` 个并行连接，多个文件 `-j` 个同时传输
+- **多线程并行**：每个文件 `-t` 个并行连接，多个文件 `-j` 个同时传输；交互指令里也能临时指定（`tp ... -j 8`）
 - **单行进度**：进度条/速度/剩余时间/当前文件合并成一行实时刷新，传输中照样可以输入指令，不刷空白行
 - **终端美化**：彩色提示符、绿色成功/红色错误/黄色用户事件；`ls` 采用 Linux ls 风格（目录蓝色、多列对齐）
 - **Tab 补全**：`>` 提示符下按 Tab 补全本地文件路径，支持左右方向键移动光标
+- **断点续传**：传输中断后重传只补缺失分块（位图持久化在接收目录 `.tpfile-resume/`），大文件断网不白传
+- **多用户群发**：服务端一条 `tp` 指令把文件同时推给多个用户
 - **目录传输**：发送文件夹会保留顶层文件夹名（如 `.minecraft`），隐藏目录也会显示在 `ls` 列表里
 - **目录日志合并**：接收文件夹时，逐文件日志合并为一行的开始/完成汇总，不再刷屏
 - **IPv6 原生支持**：服务端默认双栈监听（IPv4 + IPv6）
@@ -61,7 +63,7 @@ tpfile -c 192.168.1.5:1090
 
 | 指令 | 说明 |
 | --- | --- |
-| `tp 文件或文件夹` | 发送本地文件/目录到服务端（保留顶层文件夹名） |
+| `tp 文件或文件夹 [-j 并发数]` | 发送本地文件/目录到服务端（保留顶层文件夹名；`-j` 临时指定本次并发文件数） |
 | `tp -me 服务端文件` | 从服务端下载文件到本地 |
 | `ls [路径]` | 查看本地当前目录（Linux ls 风格，目录蓝色） |
 | `lst [路径]` | 查看服务端当前目录 |
@@ -77,7 +79,7 @@ tpfile -c 192.168.1.5:1090
 | `lst 用户id [路径]` | 查看该用户客户端的当前目录 |
 | `ping 用户id` | 测试与该用户的延迟 |
 | `kick 用户id` | 踢出该用户（对方会收到提示并退出） |
-| `tp 文件 用户id` | 发送服务端文件到该用户 |
+| `tp 文件 用户id[,用户id...] [-j 并发数]` | 发送服务端文件到指定用户（可逗号分隔多个用户群发；`-j` 临时指定本次并发拉取数） |
 | `tp -me 用户id 文件` | 从该用户客户端拉取文件到服务端 |
 | `stop` / `Ctrl+C` | 停止服务 |
 
@@ -86,6 +88,8 @@ tpfile -c 192.168.1.5:1090
 >
 > 服务端向客户端推送文件（`tp 文件 用户id`）由客户端主动建立连接拉取，双方在不同
 > 网络（NAT/防火墙后）也能正常传输，无需对方开放端口。
+>
+> 传输中断后再次发送同名同大小文件会自动断点续传，只补传缺失的分块。
 
 ## 🌰 使用示例
 
@@ -97,6 +101,8 @@ list                    # 查看在线用户
 ls                      # 查看服务端本地保存目录（Linux ls 风格）
 lst 1                   # 查看用户 1 客户端的目录
 tp server-file.txt 1    # 把服务端的 server-file.txt 发给用户 1
+tp share.zip 1,2,3        # 群发：同时推给用户 1、2、3
+tp photos 1 -j 8          # 推给用户 1，本次用 8 个并发拉取
 tp -me 1 client-file.txt  # 把用户 1 客户端的 client-file.txt 拉到服务端
 ping 1                  # 测延迟（来自用户 1 的回复: 时间=xxx）
 kick 1                  # 踢出用户 1
@@ -104,6 +110,7 @@ kick 1                  # 踢出用户 1
 # 客户端
 tpfile -c 192.168.1.5:1090
 tp ./photos             # 上传整个目录（保留 photos/ 顶层文件夹名）
+tp ./photos -j 8          # 本次上传用 8 个并发文件
 tp -me server-file.txt  # 下载服务端文件
 ls                      # 查看本地目录
 lst                     # 看服务端目录
@@ -181,29 +188,30 @@ tpfile/
 以下是所有发布文件的 SHA-256 校验值（与 `sha256sums.txt` 内容一致，可用于校验下载完整性）：
 
 ```
-6ed7e19b7f073b96f4ab21e1570454df18b0f67a0eea3403adb3745b6c7a0e21  install.ps1
-2df98a355647e9e1531fbfd9907a3ae28efb92875de9aca784c0a1baf76c9e39  install.sh
-f78423a89655d5d5320bbe567f6581ad0b44b0377f880bbed11b30a3f8e477dd  tpfile-github.zip
-1f26d918c3b5fad87db72a5281995acd57b1eff8b80567d14664cba16688117e  tpfile-linux-amd64
-da6de9db0a6d439d7e2487d65a0e44a591ac73393dad4fb79ef93c58cc870478  tpfile-linux-amd64.tar.gz
-d382de7f4b8a8491266e6824470811158fae8780fe8042f3eb810cb68e2ee575  tpfile-linux-arm64
-9c19fd47efda61f862aa7a1ccee77e8ba809d7b5cca8f73311e7ec09a9874ec9  tpfile-linux-arm64.tar.gz
-e6dddd28ae0701a450d24a05a439f77591bc13697ee792e39c3cf66660fdb301  tpfile-windows-amd64.exe
-ed577ce111a3cfe4788e8d8c3775fda5d8e3ef31fc4bb0639e17956aa335112d  tpfile-windows-amd64.zip
-b68e21d1b8564152fd91594a2baa410f43cf5cfaced4015e786a0276681f301c  tpfile-windows-arm64.exe
-e2d9cdd4b9ec71c0b4a4219120a2cdf9caf7ce04319e1839c3cfc02f6a10a3a5  tpfile-windows-arm64.zip
+001429b03d0bc70a3dc8dfbf6fafdec98f8d8148b15af769fe9e57b73ae2e4bd  install.ps1
+5347a3762b678beb01c5ac3c9e58e0b568db31b88a17c34db0743e4a6df8a5a5  install.sh
+df033728b8d57e0c68f54c7b75386dfb7a3dd98681c1f93a944783b28071e855  tpfile-github.zip
+0c0fc99838e017e3779c5cdf2bd1ba520b38df74ab86a092d0c7199b6eacf5ed  tpfile-linux-amd64
+a511ecd767dd70c792d6bbbed462aee4a55bb49b06e61de4b7dd6b0bf9eba7de  tpfile-linux-amd64.tar.gz
+cd0af32755b939627231f272d6acb18a41dc1a58bad095a89e4ff6de887f75ce  tpfile-linux-arm64
+5f343f40c2c9715ba19513a443fe4f377c83ba38ff21f494192f8832ae955b1b  tpfile-linux-arm64.tar.gz
+068f40f9b4bbd4aa465e1665a35dd8dcb10a5b098f86a2a871f7d94f66107afd  tpfile-windows-amd64.exe
+8ccdeeb5285062315ab30ee56928d23696c4774400f29e7b8f0f05a167f676d1  tpfile-windows-amd64.zip
+918b7c09f046527f76b442eaa605651810940a1bd8031e05b286ec756518b8df  tpfile-windows-arm64.exe
+7591faa8a37d04cc516dff095e14c1ad52aa3a47b48638ae21797db043686d82  tpfile-windows-arm64.zip
 ```
 
 ## 版本
 
-v1.4.4（修复：文件夹传输 `file already closed`、服务端推送进度条、进度条/提示符显示）
+v1.5.0（断点续传、多用户群发、指令内并发参数）
 
-- 修复大文件夹推送时并发写入导致的 `file already closed` 错误（磁盘写入移出全局锁、传输状态按用户隔离、用户断开自动中止未完成传输）
-- 修复服务端推送多文件时进度条停留在第 1 个文件的问题，现在随完成文件数实时更新（第 N/M 个）
-- 进度条独占一行，`>` 提示符移到进度条下方一行；连接断开/传输中断后不再残留旧进度条
-- 拉取并发受 `-j` 限制，大文件夹推送时不再打爆连接数；新增 8000 文件并发压力测试（`stress_test.go`）
+- **断点续传**：传输中断后重传只补缺失分块。接收端把已落盘分块持久化为位图（接收目录 `.tpfile-resume/`），重传同文件时发送端先查询位图、只发缺失部分；上传/推送（拉取）两个方向都支持
+- **多用户群发**：服务端 `tp 文件 1,2,3` 一条指令把文件同时推给多个用户
+- **指令内并发**：`tp 文件 用户1 -j 8`、`tp 文件夹 -j 8` 可临时指定本次传输的并发文件数，不再只能靠启动参数 `-j`
+- 修复并发分块完成时续传位图被覆盖删除的竞态；旧版客户端/服务端自动降级为全量传输，协议向后兼容
 
 历史版本：
+- v1.4.4：修复文件夹传输 `file already closed`、服务端推送进度条、进度条/提示符显示
 - v1.4.3：服务端推送显示进度条；对话框支持 `↑`/`↓` 浏览历史命令
 - v1.4.2：修复输入显示竞态、中文对齐等
 - v1.4.1、v1.4.0、v1.3.1、v1.3.0、v1.2.0、v1.1.0、v1.00

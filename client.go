@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +28,8 @@ type clientShell struct {
 	verbose  bool
 	lastPing int64
 	pullSem  chan struct{} // 拉取并发上限（=jobs），防止大文件夹推送打爆连接数
+	pushMu   sync.Mutex
+	pushSems map[string]chan struct{} // 按推送批次（pushID）隔离的拉取并发信号量（tp -j）
 }
 
 // runClientInteractive 连接服务端并进入交互会话。
@@ -153,15 +157,36 @@ func (sh *clientShell) handleCtrl(m ctrlMsg) bool {
 		return true
 	case "send":
 		// 服务端 tp -me: 把本地文件发给服务端
-		go sh.sendLocal(sh.ctx, m.Name)
+		go sh.sendLocal(sh.ctx, m.Name, sh.jobs)
 		return true
 	case "pull":
 		// 服务端 tp 文件 用户id: 通知本机主动拉取（数据连接由客户端发起，NAT 下也能通）
-		// 用信号量限制并发拉取数，避免大文件夹推送时同时建立上万条连接
+		// 用信号量限制并发拉取数，避免大文件夹推送时同时建立上万条连接；
+		// 服务端 tp ... -j 指定并发时按推送批次隔离，否则用全局 -j 上限
 		go func(m ctrlMsg) {
+			var sem chan struct{}
+			if m.PushID != "" {
+				jobs := m.Jobs
+				if jobs < 1 {
+					jobs = sh.jobs
+				}
+				sh.pushMu.Lock()
+				if sh.pushSems == nil {
+					sh.pushSems = make(map[string]chan struct{})
+				}
+				var ok bool
+				sem, ok = sh.pushSems[m.PushID]
+				if !ok {
+					sem = make(chan struct{}, jobs)
+					sh.pushSems[m.PushID] = sem
+				}
+				sh.pushMu.Unlock()
+			} else {
+				sem = sh.pullSem
+			}
 			select {
-			case sh.pullSem <- struct{}{}:
-				defer func() { <-sh.pullSem }()
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
 			case <-sh.ctx.Done():
 				return
 			}
@@ -206,19 +231,41 @@ func (sh *clientShell) execCmd(line string) bool {
 		writeJSONLine(sh.conn, ctrlMsg{Type: "ls_req", Name: path})
 		return true
 	case "tp":
-		if len(fields) >= 2 && fields[1] == "-me" {
-			if len(fields) < 3 {
-				printDim("用法: tp -me 服务端目录里的文件")
-				return true
+		me := false
+		rest := fields[1:]
+		if len(rest) > 0 && rest[0] == "-me" {
+			me = true
+			rest = rest[1:]
+		}
+		// tp ... -j 个数：本次上传的并发文件数
+		jobs := sh.jobs
+		var paths []string
+		for i := 0; i < len(rest); i++ {
+			if rest[i] == "-j" {
+				if i+1 >= len(rest) {
+					printDim("用法: tp 文件或文件夹 [-j 并发数]")
+					return true
+				}
+				n, err := strconv.Atoi(rest[i+1])
+				if err != nil || n < 1 {
+					printDim("无效的 -j 参数: %s", rest[i+1])
+					return true
+				}
+				jobs = n
+				i++
+				continue
 			}
-			writeJSONLine(sh.conn, ctrlMsg{Type: "send", Name: fields[2]})
+			paths = append(paths, rest[i])
+		}
+		if len(paths) == 0 {
+			printDim("用法: tp 文件或文件夹 [-j 并发数]")
 			return true
 		}
-		if len(fields) < 2 {
-			printDim("用法: tp 文件或文件夹")
+		if me {
+			writeJSONLine(sh.conn, ctrlMsg{Type: "send", Name: paths[0]})
 			return true
 		}
-		go sh.sendLocal(sh.ctx, fields[1])
+		go sh.sendLocal(sh.ctx, paths[0], jobs)
 		return true
 	default:
 		printErr("未知指令: %s（输入 help 查看）", fields[0])
@@ -227,16 +274,19 @@ func (sh *clientShell) execCmd(line string) bool {
 }
 
 // sendLocal 把本地文件/目录发送到服务端（客户端作为发送端）。
-func (sh *clientShell) sendLocal(ctx context.Context, path string) {
+func (sh *clientShell) sendLocal(ctx context.Context, path string, jobs int) {
 	items, err := collectFiles([]string{path})
 	if err != nil {
 		printErr("发送 %s 失败: %v", path, err)
 		return
 	}
+	if jobs < 1 {
+		jobs = sh.jobs
+	}
 	dial := func() (net.Conn, error) {
 		return dialTarget(sh.proxy, sh.server)
 	}
-	if err := sendItems(ctx, dial, sh.token, items, sh.threads, sh.retries, sh.jobs, sh.verbose); err != nil {
+	if err := sendItems(ctx, dial, sh.token, items, sh.threads, sh.retries, jobs, sh.verbose); err != nil {
 		printErr("发送 %s 失败: %v", path, err)
 		return
 	}
@@ -276,11 +326,25 @@ func (sh *clientShell) acceptChunks(ctx context.Context) {
 		go func(c net.Conn) {
 			defer c.Close()
 			br := bufio.NewReaderSize(c, 256*1024)
-			h, err := readHeader(br)
+			line, err := readLineLimited(br, maxHeaderLen)
 			if err != nil {
 				return
 			}
+			// 断点续传查询：发送端询问本机已存在哪些分块
+			var rq resumeQuery
+			if json.Unmarshal(line, &rq) == nil && rq.User == sh.token && rq.Name != "" && rq.Chunks > 0 && rq.V == protoVersion {
+				replyResumeQuery(c, sh.rcv, rq.Name, rq.Size, rq.Chunks)
+				return
+			}
+			var h chunkHeader
+			if err := json.Unmarshal(line, &h); err != nil || h.ID == "" {
+				return
+			}
 			if h.User != sh.token {
+				return
+			}
+			if h.V != protoVersion || h.Chunk < 0 || h.Chunks <= 0 || h.Chunk >= h.Chunks ||
+				h.Start < 0 || h.Len < 0 || h.Start+h.Len > h.Size {
 				return
 			}
 			sh.rcv.handleChunkConn(c, br, h)

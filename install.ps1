@@ -29,7 +29,7 @@ try {
     }
   } finally { $httpResp.Close() }
 } catch {}
-if (-not $Tag) { $Tag = '1.4.3' }
+if (-not $Tag) { $Tag = '1.5.0' }
 
 # 2. 根据 CPU 架构选择安装包
 $arch = $env:PROCESSOR_ARCHITECTURE

@@ -23,6 +23,7 @@ type transfer struct {
 	f        *os.File
 	token    string // 所属会话令牌，用于用户断开时中止其传输
 	total    int
+	resume   []bool // 断点续传位图（nil 表示无续传）；与 seen/done 配合实现幂等
 	done     atomic.Int32
 	last     atomic.Int64 // 最近活跃时间 (UnixNano)
 	received atomic.Int64 // 已写入的字节数（重试会重复计数，展示时封顶）
@@ -61,6 +62,7 @@ type receiver struct {
 	completed map[string]time.Time // 已完成传输的 ID（用于重试幂等）
 	grpMu     sync.Mutex
 	groups    map[string]*groupStat
+	resumeMu  sync.Mutex // 串行化续传位图的保存与清除，避免并发分块覆盖删除
 	aborted   atomic.Bool // 传输被中断（断开/停止），不再渲染"完成"行
 }
 
@@ -101,6 +103,17 @@ func (r *receiver) handleChunkConn(conn net.Conn, br *bufio.Reader, h chunkHeade
 	if r.verbose {
 		r.logf("接收分块 %d/%d: %s (偏移 %d, %s) 来自 %s", h.Chunk+1, h.Chunks, h.Name, h.Start, humanSize(h.Len), conn.RemoteAddr())
 	}
+	tr.mu.Lock()
+	skip := tr.resume != nil && h.Chunk < len(tr.resume) && tr.resume[h.Chunk]
+	tr.mu.Unlock()
+	if skip {
+		// 断点续传：该分块已在本地完整存在，直接确认，不重复写入
+		conn.Write([]byte(ackOK))
+		if tr.done.Load() == int32(tr.total) {
+			r.finishTransfer(tr)
+		}
+		return
+	}
 	w := &offsetWriter{f: tr.f, off: h.Start, tr: tr}
 	n, err := io.CopyN(w, br, h.Len)
 	tr.last.Store(time.Now().UnixNano())
@@ -108,9 +121,7 @@ func (r *receiver) handleChunkConn(conn net.Conn, br *bufio.Reader, h chunkHeade
 		r.logf("传输 %s 分块 %d 中断: %v (已写 %s)", h.Name, h.Chunk+1, err, humanSize(n))
 		return
 	}
-	if r.chunkDone(tr, h.Chunk) {
-		r.finishTransfer(tr)
-	}
+	r.markChunkDone(tr, h.Chunk)
 	conn.Write([]byte(ackOK))
 }
 
@@ -129,11 +140,33 @@ func (r *receiver) getTransfer(h chunkHeader) (*transfer, error) {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return nil, err
 	}
-	f, err := uniqueOpen(dest)
+	// 断点续传：本地存在有效位图且目标文件还在时，打开原文件继续写入，
+	// 已存在的分块在 handleChunkConn / pullFile 中直接确认跳过。
+	var resumeBits []bool
+	if bits, ok := loadResumeBits(r.dir, rel, h.Size); ok {
+		if fi, err := os.Stat(dest); err == nil && fi.Mode().IsRegular() {
+			resumeBits = sanitizeResume(bits, h.Size, fi.Size())
+		}
+	}
+	var f *os.File
+	if resumeBits != nil {
+		f, err = os.OpenFile(dest, os.O_CREATE|os.O_RDWR, 0o644)
+	} else {
+		f, err = uniqueOpen(dest)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("创建文件失败: %w", err)
 	}
-	tr := &transfer{id: h.ID, path: dest, name: rel, size: h.Size, f: f, token: h.User, total: h.Chunks, seen: make(map[int]bool)}
+	seen := make(map[int]bool)
+	var doneCount int32
+	for i, ok := range resumeBits {
+		if ok {
+			seen[i] = true
+			doneCount++
+		}
+	}
+	tr := &transfer{id: h.ID, path: dest, name: rel, size: h.Size, f: f, token: h.User, total: h.Chunks, seen: seen, resume: resumeBits}
+	tr.done.Store(doneCount)
 	tr.last.Store(time.Now().UnixNano()) // 立即激活，避免 watchdog 误杀尚未开始的分块
 	r.regMu.Lock()
 	if existing, ok := r.reg[h.ID]; ok {
@@ -163,6 +196,34 @@ func (r *receiver) chunkDone(tr *transfer, idx int) bool {
 	return tr.done.Add(1) == int32(tr.total)
 }
 
+// markChunkDone 记录一个成功写入的分块：全部完成时结束传输，否则持久化续传位图。
+func (r *receiver) markChunkDone(tr *transfer, idx int) {
+	if r.chunkDone(tr, idx) {
+		r.finishTransfer(tr)
+		return
+	}
+	if tr.resume != nil {
+		tr.mu.Lock()
+		if idx < len(tr.resume) {
+			tr.resume[idx] = true
+		}
+		bits := append([]bool(nil), tr.resume...)
+		tr.mu.Unlock()
+		// 与 finishTransfer 的位图清除互斥：若传输已被并发分块完成并删除，
+		// 这里不再保存，避免删除后又被覆盖导致位图残留。
+		r.resumeMu.Lock()
+		r.regMu.Lock()
+		_, alive := r.reg[tr.id]
+		r.regMu.Unlock()
+		if alive {
+			if err := saveResumeBits(r.dir, tr.name, tr.size, bits); err != nil && r.verbose {
+				r.logf("保存续传位图失败: %v", err)
+			}
+		}
+		r.resumeMu.Unlock()
+	}
+}
+
 func (r *receiver) finishTransfer(tr *transfer) {
 	r.regMu.Lock()
 	delete(r.reg, tr.id)
@@ -174,6 +235,9 @@ func (r *receiver) finishTransfer(tr *transfer) {
 	r.compMu.Lock()
 	r.completed[tr.id] = time.Now()
 	r.compMu.Unlock()
+	r.resumeMu.Lock()
+	clearResumeBits(r.dir, tr.name)
+	r.resumeMu.Unlock()
 	if r.verbose {
 		r.okf("接收完成 %s (%s)", tr.name, humanSize(tr.size))
 		return
@@ -611,6 +675,9 @@ func sendFile(ctx context.Context, dial func() (net.Conn, error), token string, 
 	chunks := chunkPlan(it.size, threads)
 	id := randomID()
 
+	// 断点续传：向接收端查询已存在的分块，只发送缺失部分
+	bits := queryResume(dial, token, it.rel, it.size, len(chunks))
+
 	ctxC, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -618,6 +685,9 @@ func sendFile(ctx context.Context, dial func() (net.Conn, error), token string, 
 	errCh := make(chan error, len(chunks))
 
 	for i, c := range chunks {
+		if bits != nil && i < len(bits) && bits[i] {
+			continue // 该分块接收端已有，跳过
+		}
 		wg.Add(1)
 		go func(idx int, c chunk) {
 			defer wg.Done()
@@ -724,7 +794,16 @@ func pullFile(ctx context.Context, dial func() (net.Conn, error), token string, 
 		errMu    sync.Mutex
 		firstErr error
 	)
+	// 断点续传：跳过本地已完整存在的分块，只拉取缺失部分
+	tr.mu.Lock()
+	bits := append([]bool(nil), tr.resume...)
+	tr.mu.Unlock()
+	missing := 0
 	for i, c := range chunks {
+		if bits != nil && i < len(bits) && bits[i] {
+			continue
+		}
+		missing++
 		wg.Add(1)
 		go func(idx int, c chunk) {
 			defer wg.Done()
@@ -733,9 +812,7 @@ func pullFile(ctx context.Context, dial func() (net.Conn, error), token string, 
 				err := pullChunk(ctxC, dial, token, tr, idx, c, auth)
 				if err == nil {
 					// 与上传接收一致：每个成功分块计数一次，最后一个触发完成
-					if rcv.chunkDone(tr, idx) {
-						rcv.finishTransfer(tr)
-					}
+					rcv.markChunkDone(tr, idx)
 					return
 				}
 				lastErr = err
@@ -759,6 +836,10 @@ func pullFile(ctx context.Context, dial func() (net.Conn, error), token string, 
 				errMu.Unlock()
 			}
 		}(i, c)
+	}
+	if missing == 0 && len(chunks) > 0 {
+		rcv.finishTransfer(tr)
+		return nil
 	}
 	wg.Wait()
 	if firstErr != nil {

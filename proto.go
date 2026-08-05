@@ -36,6 +36,24 @@ type chunkHeader struct {
 	Auth   string `json:"auth,omitempty"` // 拉取授权令牌（服务端推送时签发）
 }
 
+// resumeQuery 是断点续传查询（发送端 -> 接收端，走一条普通数据连接）：
+// 发送端告知文件名/大小/分块数，接收端返回本地已存在分块的位图。
+// 旧版接收端不认识此消息会直接断开，发送端将其视为"无已存在分块"，全量传输。
+type resumeQuery struct {
+	V      int    `json:"v"`
+	User   string `json:"user"`   // 会话令牌
+	Name   string `json:"name"`   // 相对路径，使用 / 分隔
+	Size   int64  `json:"size"`   // 文件总大小
+	Chunks int    `json:"chunks"` // 分块总数
+}
+
+// resumeReply 是续传查询的回复（接收端 -> 发送端）：与分块下标一一对应的位图，
+// true 表示该分块已在本地完整存在，无需重传。
+type resumeReply struct {
+	Chunks []bool `json:"chunks"`
+}
+
+
 // ctrlMsg 是控制连接上的会话消息（JSON + 换行）。
 // type: hello / bye / kick / ping / pong / ls_req / ls_resp / send / pull / pull_done
 type ctrlMsg struct {
@@ -48,6 +66,8 @@ type ctrlMsg struct {
 	Port    int      `json:"port,omitempty"`    // 客户端入站传输端口
 	ID      int      `json:"id,omitempty"`      // 用户 id（服务端分配）
 	Msg     string   `json:"msg,omitempty"`     // 附加消息（如踢出原因）
+	PushID  string   `json:"push_id,omitempty"` // 推送批次 ID（多用户群发时区分批次）
+	Jobs    int      `json:"jobs,omitempty"`    // 本次推送的并发拉取上限（tp -j）
 	Entries []string `json:"entries,omitempty"` // ls 目录列表
 	Ts      int64    `json:"ts,omitempty"`      // ping 时间戳 (UnixNano)
 }

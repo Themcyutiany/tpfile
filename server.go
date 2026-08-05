@@ -177,6 +177,15 @@ func (sh *serverShell) dispatchConn(ctx context.Context, conn net.Conn) {
 		sh.rcv.handleChunkConn(conn, br, h)
 		return
 	}
+	// 断点续传查询：发送端询问接收端已存在哪些分块（无 id，与分块首部区分）
+	var rq resumeQuery
+	if err := json.Unmarshal(line, &rq); err == nil && rq.User != "" && rq.Name != "" && rq.Chunks > 0 && rq.V == protoVersion {
+		if !sh.validToken(rq.User) {
+			return
+		}
+		replyResumeQuery(conn, sh.rcv, rq.Name, rq.Size, rq.Chunks)
+		return
+	}
 	// 控制连接：第一条必须是 hello
 	var m ctrlMsg
 	if err := json.Unmarshal(line, &m); err != nil || m.Type != "hello" {
@@ -295,7 +304,7 @@ func (sh *serverShell) handleCtrl(u *user, m ctrlMsg) bool {
 		printList(fmt.Sprintf("[用户 %d] 的目录:", u.id), m.Entries)
 	case "send":
 		// 客户端 tp -me: 服务端把文件推送给客户端（客户端主动拉取）
-		go sh.pushToUser(u, m.Name)
+		go sh.pushToUser(u, m.Name, sh.jobs)
 	case "pull_done":
 		sh.pullMu.Lock()
 		if pa, ok := sh.pulls[m.Auth]; ok {
@@ -459,34 +468,70 @@ func (sh *serverShell) execTp(fields []string) bool {
 		me = true
 		rest = rest[1:]
 	}
+	// tp ... -j 个数：提取本次推送的并发拉取上限（对推送生效）
+	jobs := sh.jobs
+	filtered := make([]string, 0, len(rest))
+	for i := 0; i < len(rest); i++ {
+		if rest[i] == "-j" {
+			if i+1 >= len(rest) {
+				printErr("-j 后面需要跟并发数")
+				return true
+			}
+			n, err := strconv.Atoi(rest[i+1])
+			if err != nil || n < 1 {
+				printErr("无效的 -j 参数: %s", rest[i+1])
+				return true
+			}
+			jobs = n
+			i++
+			continue
+		}
+		filtered = append(filtered, rest[i])
+	}
+	rest = filtered
 	if len(rest) < 2 {
-		printDim("用法: tp 文件 用户id 或 tp -me 用户id 文件")
+		printDim("用法: tp 文件 用户id[,用户id...] [-j 并发数] 或 tp -me 用户id 文件")
 		return true
 	}
-	var path, idStr string
+	var path string
+	var idStrs []string
 	if me {
 		// tp -me 用户id 文件: 先用户id, 后文件
-		idStr, path = rest[0], rest[1]
+		idStrs = append(idStrs, strings.Split(rest[0], ",")...)
+		path = rest[1]
 	} else {
-		path, idStr = rest[0], rest[1]
+		// tp 文件 用户id...: 第一个是路径，其余全部是用户 id（可用逗号分隔）
+		path = rest[0]
+		for _, s := range rest[1:] {
+			idStrs = append(idStrs, strings.Split(s, ",")...)
+		}
 	}
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		printErr("用户id 无效")
-		return true
-	}
-	u := sh.userByID(id)
-	if u == nil {
-		printErr("用户 %d 不存在", id)
-		return true
+	var users []*user
+	for _, idStr := range idStrs {
+		id, err := strconv.Atoi(strings.TrimSpace(idStr))
+		if err != nil {
+			printErr("用户id 无效: %s", idStr)
+			return true
+		}
+		u := sh.userByID(id)
+		if u == nil {
+			printErr("用户 %d 不存在", id)
+			return true
+		}
+		users = append(users, u)
 	}
 	if me {
 		// 拉取: 通知客户端把本地文件发到服务端
-		sh.sendCtrl(u, ctrlMsg{Type: "send", Name: path})
+		for _, u := range users {
+			sh.sendCtrl(u, ctrlMsg{Type: "send", Name: path})
+		}
 		return true
 	}
 	// 推送: 通知客户端主动拉取（数据连接由客户端发起，NAT 下也能通）
-	go sh.pushToUser(u, path)
+	for _, u := range users {
+		go sh.pushToUser(u, path, jobs)
+	}
+	printOK("已通知 %d 个用户拉取 %s", len(users), path)
 	return true
 }
 
@@ -494,7 +539,7 @@ func (sh *serverShell) execTp(fields []string) bool {
 // （NAT/防火墙后连不通），改为通知客户端主动发起拉取连接。
 // 每个文件签发一个随机授权令牌，客户端凭令牌拉取，因此绝对路径
 // （保存目录之外的文件）也能推送。
-func (sh *serverShell) pushToUser(u *user, path string) {
+func (sh *serverShell) pushToUser(u *user, path string, jobs int) {
 	if u.ver < pullProtoVer {
 		printErr("用户 %d 的 tpfile 版本过旧，请对方更新到最新版后再试", u.id)
 		return
@@ -513,6 +558,9 @@ func (sh *serverShell) pushToUser(u *user, path string) {
 	for _, it := range items {
 		total += it.size
 	}
+	if jobs < 1 {
+		jobs = sh.jobs
+	}
 	push := &pushJob{
 		id:      randomID(),
 		totalN:  len(items),
@@ -529,7 +577,7 @@ func (sh *serverShell) pushToUser(u *user, path string) {
 	for _, it := range items {
 		auth := randomID()
 		sh.pulls[auth] = &pullAuth{abs: it.abs, size: it.size, name: it.rel, push: push, added: time.Now(), user: u.id}
-		msgs = append(msgs, ctrlMsg{Type: "pull", Name: filepath.ToSlash(it.rel), Size: it.size, Auth: auth})
+		msgs = append(msgs, ctrlMsg{Type: "pull", Name: filepath.ToSlash(it.rel), Size: it.size, Auth: auth, PushID: push.id, Jobs: jobs})
 	}
 	sh.pullMu.Unlock()
 
