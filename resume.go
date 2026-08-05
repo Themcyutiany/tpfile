@@ -95,7 +95,7 @@ func queryResume(dial func() (net.Conn, error), token, name string, size int64, 
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(15 * time.Second))
-	if err := writeJSONLine(conn, resumeQuery{V: protoVersion, User: token, Name: name, Size: size, Chunks: nChunks}); err != nil {
+	if err := writeJSONLine(conn, resumeQuery{Type: resumeQueryType, V: protoVersion, User: token, Name: name, Size: size, Chunks: nChunks}); err != nil {
 		return nil
 	}
 	br := bufio.NewReader(conn)

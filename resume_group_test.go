@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -261,4 +262,44 @@ func TestExecTpJobs(t *testing.T) {
 	if m1.PushID == m2.PushID {
 		t.Fatal("不同用户的推送批次 ID 应不同")
 	}
+}
+
+// TestGetTransferConcurrent 并发分块连接同时创建同一传输时，必须只生成一个目标文件，
+// 且所有分块拿到同一个 transfer（防止各自 uniqueOpen 生成不同文件导致内容错位）。
+func TestGetTransferConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	rcv := newReceiver(dir, "测试", false)
+	const n = 16
+	trs := make([]*transfer, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			tr, err := rcv.getTransfer(chunkHeader{V: protoVersion, ID: "same-id", User: "tok", Name: "x.bin", Size: 100, Chunks: n})
+			if err != nil {
+				t.Errorf("getTransfer: %v", err)
+				return
+			}
+			trs[i] = tr
+		}(i)
+	}
+	wg.Wait()
+	for i := 1; i < n; i++ {
+		if trs[i] != trs[0] {
+			t.Fatal("并发分块拿到了不同的 transfer")
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "x.bin" {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("应只生成 x.bin，实际: %v", names)
+	}
+	rcv.closeAll() // 关闭句柄，便于 TempDir 清理
 }

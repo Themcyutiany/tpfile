@@ -62,7 +62,7 @@ type receiver struct {
 	completed map[string]time.Time // 已完成传输的 ID（用于重试幂等）
 	grpMu     sync.Mutex
 	groups    map[string]*groupStat
-	resumeMu  sync.Mutex // 串行化续传位图的保存与清除，避免并发分块覆盖删除
+	resumeMu  sync.Mutex  // 串行化续传位图的保存与清除，避免并发分块覆盖删除
 	aborted   atomic.Bool // 传输被中断（断开/停止），不再渲染"完成"行
 }
 
@@ -126,17 +126,20 @@ func (r *receiver) handleChunkConn(conn net.Conn, br *bufio.Reader, h chunkHeade
 }
 
 func (r *receiver) getTransfer(h chunkHeader) (*transfer, error) {
-	r.regMu.Lock()
-	if tr, ok := r.reg[h.ID]; ok {
-		r.regMu.Unlock()
-		return tr, nil
-	}
-	r.regMu.Unlock()
 	rel, err := sanitizeRelPath(h.Name)
 	if err != nil {
 		return nil, err
 	}
 	dest := filepath.Join(r.dir, filepath.FromSlash(rel))
+	// 同一传输的并发分块连接可能同时走到这里：若各自 uniqueOpen 会生成不同的
+	// 文件名，后注册者的句柄将指向错误文件（内容写入 pull (1).bin 而 pull.bin
+	// 为空）。因此从查表到注册全程持有 regMu，串行化同一传输的创建，保证所有
+	// 分块写入同一个文件。
+	r.regMu.Lock()
+	defer r.regMu.Unlock()
+	if tr, ok := r.reg[h.ID]; ok {
+		return tr, nil
+	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return nil, err
 	}
@@ -168,15 +171,7 @@ func (r *receiver) getTransfer(h chunkHeader) (*transfer, error) {
 	tr := &transfer{id: h.ID, path: dest, name: rel, size: h.Size, f: f, token: h.User, total: h.Chunks, seen: seen, resume: resumeBits}
 	tr.done.Store(doneCount)
 	tr.last.Store(time.Now().UnixNano()) // 立即激活，避免 watchdog 误杀尚未开始的分块
-	r.regMu.Lock()
-	if existing, ok := r.reg[h.ID]; ok {
-		// 并发下另一个分块连接已创建同一传输，丢弃本次打开的文件
-		r.regMu.Unlock()
-		f.Close()
-		return existing, nil
-	}
 	r.reg[h.ID] = tr
-	r.regMu.Unlock()
 	if r.verbose {
 		r.logf("开始接收 %s (%s, %d 个分块)", tr.name, humanSize(tr.size), tr.total)
 	} else {

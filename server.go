@@ -44,8 +44,8 @@ type serverShell struct {
 	nextID  int
 	stopOne sync.Once
 	pullMu  sync.Mutex
-	pulls   map[string]*pullAuth  // 拉取授权令牌 -> 文件
-	pushes  map[string]*pushJob   // 推送任务 -> 发送进度
+	pulls   map[string]*pullAuth // 拉取授权令牌 -> 文件
+	pushes  map[string]*pushJob  // 推送任务 -> 发送进度
 }
 
 // pullAuth 是一次"服务端推送"的授权：客户端凭令牌拉取对应文件。
@@ -179,7 +179,7 @@ func (sh *serverShell) dispatchConn(ctx context.Context, conn net.Conn) {
 	}
 	// 断点续传查询：发送端询问接收端已存在哪些分块（无 id，与分块首部区分）
 	var rq resumeQuery
-	if err := json.Unmarshal(line, &rq); err == nil && rq.User != "" && rq.Name != "" && rq.Chunks > 0 && rq.V == protoVersion {
+	if err := json.Unmarshal(line, &rq); err == nil && rq.Type == resumeQueryType && rq.User != "" && rq.Name != "" && rq.Chunks > 0 && rq.V == protoVersion {
 		if !sh.validToken(rq.User) {
 			return
 		}

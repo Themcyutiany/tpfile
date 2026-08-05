@@ -17,21 +17,23 @@ const (
 	pullProtoVer = 3
 	// chunkDirOut 表示分块连接的方向为"服务端 -> 客户端"（客户端发起拉取）。
 	chunkDirOut = "out"
+	// resumeQueryType 标识续传查询消息，避免与分块首部混淆。
+	resumeQueryType = "resume_query"
 )
 
 // chunkHeader 是每个分块连接的首部（JSON + 换行），随后紧跟分块数据；默认方向为
 // "客户端 -> 服务端"（上传），服务端写完分块后回复 "ok\n"；Dir 为 "out" 时方向相反，
 // 由客户端发起拉取，服务端直接在该连接上写出分块数据。
 type chunkHeader struct {
-	V      int    `json:"v"`      // 协议版本
-	ID     string `json:"id"`     // 传输 ID（一次文件传输的所有分块共用）
-	User   string `json:"user"`   // 会话令牌，用于服务端把分块连接归属到某个用户
-	Name   string `json:"name"`   // 相对路径，使用 / 分隔
-	Size   int64  `json:"size"`   // 文件总大小
-	Chunk  int    `json:"chunk"`  // 当前分块下标（从 0 开始）
-	Chunks int    `json:"chunks"` // 分块总数
-	Start  int64  `json:"start"`  // 本分块在文件中的起始偏移
-	Len    int64  `json:"len"`    // 本分块字节数
+	V      int    `json:"v"`              // 协议版本
+	ID     string `json:"id"`             // 传输 ID（一次文件传输的所有分块共用）
+	User   string `json:"user"`           // 会话令牌，用于服务端把分块连接归属到某个用户
+	Name   string `json:"name"`           // 相对路径，使用 / 分隔
+	Size   int64  `json:"size"`           // 文件总大小
+	Chunk  int    `json:"chunk"`          // 当前分块下标（从 0 开始）
+	Chunks int    `json:"chunks"`         // 分块总数
+	Start  int64  `json:"start"`          // 本分块在文件中的起始偏移
+	Len    int64  `json:"len"`            // 本分块字节数
 	Dir    string `json:"dir,omitempty"`  // "out" 表示服务端 -> 客户端（拉取）
 	Auth   string `json:"auth,omitempty"` // 拉取授权令牌（服务端推送时签发）
 }
@@ -40,6 +42,7 @@ type chunkHeader struct {
 // 发送端告知文件名/大小/分块数，接收端返回本地已存在分块的位图。
 // 旧版接收端不认识此消息会直接断开，发送端将其视为"无已存在分块"，全量传输。
 type resumeQuery struct {
+	Type   string `json:"type"` // 固定为 resumeQueryType，区分分块首部
 	V      int    `json:"v"`
 	User   string `json:"user"`   // 会话令牌
 	Name   string `json:"name"`   // 相对路径，使用 / 分隔
@@ -52,7 +55,6 @@ type resumeQuery struct {
 type resumeReply struct {
 	Chunks []bool `json:"chunks"`
 }
-
 
 // ctrlMsg 是控制连接上的会话消息（JSON + 换行）。
 // type: hello / bye / kick / ping / pong / ls_req / ls_resp / send / pull / pull_done

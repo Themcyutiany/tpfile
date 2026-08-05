@@ -332,7 +332,7 @@ func (sh *clientShell) acceptChunks(ctx context.Context) {
 			}
 			// 断点续传查询：发送端询问本机已存在哪些分块
 			var rq resumeQuery
-			if json.Unmarshal(line, &rq) == nil && rq.User == sh.token && rq.Name != "" && rq.Chunks > 0 && rq.V == protoVersion {
+			if json.Unmarshal(line, &rq) == nil && rq.Type == resumeQueryType && rq.User == sh.token && rq.Name != "" && rq.Chunks > 0 && rq.V == protoVersion {
 				replyResumeQuery(c, sh.rcv, rq.Name, rq.Size, rq.Chunks)
 				return
 			}

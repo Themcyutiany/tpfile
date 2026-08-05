@@ -190,17 +190,16 @@ tpfile/
 ```
 001429b03d0bc70a3dc8dfbf6fafdec98f8d8148b15af769fe9e57b73ae2e4bd  install.ps1
 5347a3762b678beb01c5ac3c9e58e0b568db31b88a17c34db0743e4a6df8a5a5  install.sh
-df033728b8d57e0c68f54c7b75386dfb7a3dd98681c1f93a944783b28071e855  tpfile-github.zip
-0c0fc99838e017e3779c5cdf2bd1ba520b38df74ab86a092d0c7199b6eacf5ed  tpfile-linux-amd64
-a511ecd767dd70c792d6bbbed462aee4a55bb49b06e61de4b7dd6b0bf9eba7de  tpfile-linux-amd64.tar.gz
-cd0af32755b939627231f272d6acb18a41dc1a58bad095a89e4ff6de887f75ce  tpfile-linux-arm64
-5f343f40c2c9715ba19513a443fe4f377c83ba38ff21f494192f8832ae955b1b  tpfile-linux-arm64.tar.gz
-068f40f9b4bbd4aa465e1665a35dd8dcb10a5b098f86a2a871f7d94f66107afd  tpfile-windows-amd64.exe
-8ccdeeb5285062315ab30ee56928d23696c4774400f29e7b8f0f05a167f676d1  tpfile-windows-amd64.zip
-918b7c09f046527f76b442eaa605651810940a1bd8031e05b286ec756518b8df  tpfile-windows-arm64.exe
-7591faa8a37d04cc516dff095e14c1ad52aa3a47b48638ae21797db043686d82  tpfile-windows-arm64.zip
+32d431b592d475d909f54b8cf85a7aa096c5a010862dd34770814dfdf0baf18b  tpfile-github.zip
+43b22573a828f25918bded3d2b4854ee696731bbee3de81ff36b8ffb49a8854e  tpfile-linux-amd64
+2dd072f61f1c6c00bab78724c808d71cad9a0bc4dd27854858d980566ffc64f7  tpfile-linux-amd64.tar.gz
+f6ce64baafb1b70887359f5784f0b7da50ea2ae242f222706cdb5bc4f68d5daf  tpfile-linux-arm64
+eed9499ceaa79cf6953ff9d1885e141074fba57e1a9574da3690533cd0fccc85  tpfile-linux-arm64.tar.gz
+66d4e775759e18791985c902f4526719963f236b22936d0410f7d975f0d51341  tpfile-windows-amd64.exe
+e57ba46eaaf5ee615fbac38119036bc7259788808a4ae2987dbe78a20d6e11a5  tpfile-windows-amd64.zip
+0b7335ed27d8706b198f2f11ad3194d7389b5e1723797dacef2b9b928c7961fd  tpfile-windows-arm64.exe
+3e32bb097728061e14a17b8df014d6947bbb181ba7c8679c43c7e4ebc246bb8e  tpfile-windows-arm64.zip
 ```
-
 ## 版本
 
 v1.5.0（断点续传、多用户群发、指令内并发参数）
@@ -209,6 +208,7 @@ v1.5.0（断点续传、多用户群发、指令内并发参数）
 - **多用户群发**：服务端 `tp 文件 1,2,3` 一条指令把文件同时推给多个用户
 - **指令内并发**：`tp 文件 用户1 -j 8`、`tp 文件夹 -j 8` 可临时指定本次传输的并发文件数，不再只能靠启动参数 `-j`
 - 修复并发分块完成时续传位图被覆盖删除的竞态；旧版客户端/服务端自动降级为全量传输，协议向后兼容
+- 修复并发分块创建同一传输时可能写入不同文件的竞态（Linux 下偶发文件内容不一致）；续传查询消息增加类型标识，避免被误判为分块首部
 
 历史版本：
 - v1.4.4：修复文件夹传输 `file already closed`、服务端推送进度条、进度条/提示符显示
